@@ -458,7 +458,7 @@ class cNMF():
     def prepare(self, counts_fn, components, n_iter = 100, densify=False, tpm_fn=None, seed=None,
                         beta_loss='frobenius',num_highvar_genes=2000, genes_file=None,
                         alpha_usage=0.0, alpha_spectra=0.0, init='random', 
-                        total_workers=-1, use_gpu=False, batch_size=5000, max_NMF_iter=1000):
+                        total_workers=-1, use_gpu=False, batch_size=5000, max_NMF_iter=1000, algo: str = "halsvar"):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
         Prepare file for distributing jobs over workers.
@@ -512,6 +512,16 @@ class cNMF():
 
         max_NMF_iter : int, optional (default=1000)
             Maximum number of iterations per individual NMF run
+
+
+        solver: str, optional (default='halsvar')
+            algo: ``str``, optional, default: ``halsvar``
+            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), 
+            ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+            ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1.
+            ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
+            
+            If mode is online, there is no difference between ``hals`` and ``halsvar``.
         """
         
         
@@ -592,7 +602,7 @@ class cNMF():
                                                                   beta_loss=beta_loss, alpha_usage=alpha_usage,
                                                                   alpha_spectra=alpha_spectra, init=init, 
                                                                   total_workers=total_workers, use_gpu=use_gpu,
-                                                                  batch_size=batch_size, max_iter=max_NMF_iter)
+                                                                  batch_size=batch_size, max_iter=max_NMF_iter, algo = algo)
         self.save_nmf_iter_params(replicate_params, run_params)
         
     
@@ -704,7 +714,7 @@ class cNMF():
                                alpha_usage=0.0, alpha_spectra=0.0,
                                init='random', total_workers=-1, 
                                use_gpu=False, batch_size=5000, 
-                               max_iter=1000):
+                               max_iter=1000, algo = "halsvar"):
         """
         Create a DataFrame with parameters for NMF iterations.
 
@@ -760,14 +770,14 @@ class cNMF():
                         l1_ratio_H=0.0,
                         l1_ratio_W=0.0,
                         beta_loss=beta_loss,
-                        algo='mu',
                         tol=1e-4,
                         mode='online',
                         online_chunk_max_iter=max_iter,
                         online_chunk_size=batch_size,
                         init=init,
                         n_jobs=total_workers,
-                        use_gpu=use_gpu
+                        use_gpu=use_gpu,
+                        algo = algo
                         )
         
         ## Coordinate descent is faster than multiplicative update but only works for frobenius
@@ -920,7 +930,7 @@ class cNMF():
         return combined_spectra
     
     
-    def refit_usage(self, X, spectra, usage=None):
+    def refit_usage(self, X, spectra, algo, usage=None):
         """
         Takes an input data matrix and a fixed spectra and uses NNLS to find the optimal
         usage matrix. Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'].
@@ -960,23 +970,29 @@ class cNMF():
                 print("CUDA is not available on your machine. Use CPU mode instead.")
 
         # Refit usages (denoted H here)
-        rf_usages = fit_H_online(
-                        X,
-                        spectra,
-                        H_init=usage,
-                        chunk_size= refit_nmf_kwargs['online_chunk_size'],
-                        chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
-                        h_tol= 0.05,
-                        l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
-                        l2_reg_H = 0.0,
-                        epsilon = 1e-16,
-                        device = device_type
-                        )
+        if algo == 'mu':
+            rf_usages = fit_H_online(
+                            X,
+                            spectra,
+                            H_init=usage,
+                            chunk_size= refit_nmf_kwargs['online_chunk_size'],
+                            chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
+                            h_tol= 0.05,
+                            l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
+                            l2_reg_H = 0.0,
+                            epsilon = 1e-16,
+                            device = device_type
+                            )
+        elif algo == 'halsvar':
+            rf_usages = spectra  #for now halsvar updater not avaliable 
+        else:
+            rf_usages = spectra 
+            print("The algo updater is not avaliable, return orginal value")
 
         return (rf_usages)
     
     
-    def refit_spectra(self, X, usage):
+    def refit_spectra(self, X, usage, algo):
         """
         Takes an input data matrix and a fixed usage matrix and uses NNLS to find the optimal
         spectra matrix. Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'].
@@ -991,7 +1007,7 @@ class cNMF():
         usage : pandas.DataFrame or numpy.ndarray, cells X programs
             Non-negative spectra of expression programs
         """
-        return(self.refit_usage(X.T, usage.T).T)
+        return(self.refit_usage(X.T, usage.T, algo = algo).T)
 
 
     def consensus(self, k, density_threshold=0.5, local_neighborhood_size=0.30, show_clustering=True,
@@ -1041,6 +1057,9 @@ class cNMF():
             most users
         """
         
+        _nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
+        algo = _nmf_kwargs['algo']
+
         
         merged_spectra = load_df_from_npz(self.paths['merged_spectra']%k)
         if norm_counts is None:
@@ -1090,7 +1109,7 @@ class cNMF():
         median_spectra = (median_spectra.T/median_spectra.sum(1)).T
 
         # Obtain reconstructed count matrix by re-fitting usage and computing dot product: usage.dot(spectra)
-        rf_usages = self.refit_usage(norm_counts.X, median_spectra)
+        rf_usages = self.refit_usage(norm_counts.X, median_spectra, algo)
         rf_usages = pd.DataFrame(rf_usages, index=norm_counts.obs.index, columns=median_spectra.index)     
         
         if skip_density_and_return_after_stats:
@@ -1123,7 +1142,7 @@ class cNMF():
         # with usages fixed and TPM as the input matrix
         tpm = sc.read(self.paths['tpm'])
         tpm_stats = load_df_from_npz(self.paths['tpm_stats'])
-        spectra_tpm = self.refit_spectra(tpm.X, norm_usages.astype(tpm.X.dtype))
+        spectra_tpm = self.refit_spectra(tpm.X, norm_usages.astype(tpm.X.dtype), algo)
         spectra_tpm = pd.DataFrame(spectra_tpm, index=rf_usages.columns, columns=tpm.var.index)
         if normalize_tpm_spectra:
             spectra_tpm = spectra_tpm.div(spectra_tpm.sum(axis=1), axis=0) * 1e6
@@ -1145,7 +1164,7 @@ class cNMF():
             spectra_tpm_rf = spectra_tpm.loc[:,hvgs]
 
             spectra_tpm_rf = spectra_tpm_rf.div(tpm_stats.loc[hvgs, '__std'], axis=1)
-            rf_usages = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype))
+            rf_usages = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype),algo)
             rf_usages = pd.DataFrame(rf_usages, index=norm_counts.obs.index, columns=spectra_tpm_rf.index)                                                                  
                
         save_df_to_npz(median_spectra, self.paths['consensus_spectra']%(k, density_threshold_repl))
