@@ -458,7 +458,7 @@ class cNMF():
     def prepare(self, counts_fn, components, n_iter = 100, densify=False, tpm_fn=None, seed=None,
                         beta_loss='frobenius',num_highvar_genes=2000, genes_file=None,
                         alpha_usage=0.0, alpha_spectra=0.0, init='random', 
-                        total_workers=-1, use_gpu=False, batch_size=5000, max_NMF_iter=1000, algo: str = "halsvar"):
+                        total_workers=-1, use_gpu=False, mode = 'online', batch_size=5000, max_NMF_iter=1000, algo: str = "halsvar"):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
         Prepare file for distributing jobs over workers.
@@ -487,7 +487,13 @@ class cNMF():
         seed : int or None, optional (default=None)
             Seed for sklearn random state.
             
-        beta_loss : str or None, optional (default='frobenius')
+        beta_loss: ``str`` or ``float``
+        Beta loss between the given matrix X and its approximation calculated by HW, which is used as the metric to be minimized during the computation.
+        It can be a string from options:
+            - ``frobenius``: L2 distance, same as ``beta_loss=2.0``.
+            - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
+            - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
+        Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
 
         num_highvar_genes : int or None, optional (default=2000)
             If provided and genes_file is None, will compute this many highvar genes to use for factorization
@@ -506,6 +512,10 @@ class cNMF():
 
         use_gpuL bool, optional (default=False)
             Whether to use GPU.
+
+        mode: ``str``, optional, default: ``batch``
+        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
+        For other beta loss, it switches back to ``batch`` method.
 
         batch_size : int, optional (default=5000)
             Batch size for online NMF leaning.
@@ -602,7 +612,8 @@ class cNMF():
                                                                   beta_loss=beta_loss, alpha_usage=alpha_usage,
                                                                   alpha_spectra=alpha_spectra, init=init, 
                                                                   total_workers=total_workers, use_gpu=use_gpu,
-                                                                  batch_size=batch_size, max_iter=max_NMF_iter, algo = algo)
+                                                                  batch_size=batch_size, max_iter=max_NMF_iter, algo = algo,
+                                                                  mode = mode)
         self.save_nmf_iter_params(replicate_params, run_params)
         
     
@@ -710,11 +721,11 @@ class cNMF():
         
     def get_nmf_iter_params(self, ks, n_iter = 100,
                                random_state_seed = None,
-                               beta_loss = 'kullback-leibler',
+                               beta_loss = beta_loss,
                                alpha_usage=0.0, alpha_spectra=0.0,
                                init='random', total_workers=-1, 
                                use_gpu=False, batch_size=5000, 
-                               max_iter=1000, algo = "halsvar"):
+                               max_iter=1000, algo = "halsvar", mode = 'online'):
         """
         Create a DataFrame with parameters for NMF iterations.
 
@@ -771,7 +782,7 @@ class cNMF():
                         l1_ratio_W=0.0,
                         beta_loss=beta_loss,
                         tol=1e-4,
-                        mode='online',
+                        mode=mode,
                         online_chunk_max_iter=max_iter,
                         online_chunk_size=batch_size,
                         init=init,
