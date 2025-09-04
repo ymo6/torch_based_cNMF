@@ -29,6 +29,9 @@ import scanpy as sc
 
 from multiprocessing import Pool 
 
+from typing import List, Union, Tuple, Optional
+
+
 def save_df_to_npz(obj, filename):
     np.savez_compressed(filename, data=obj.values, index=obj.index.values, columns=obj.columns.values)
 
@@ -183,8 +186,6 @@ def get_highvar_genes_sparse(expression, expected_fano_threshold=None,
         }
     return gene_counts_stats, gene_fano_parameters
 
-
-
 def get_highvar_genes(input_counts, expected_fano_threshold=None,
                        minimal_mean=0.5, numgenes=None):
     # Find high variance genes within those cells
@@ -237,7 +238,6 @@ def get_highvar_genes(input_counts, expected_fano_threshold=None,
         }
     return gene_counts_stats, gene_fano_parameters
 
-
 def compute_tpm(input_counts):
     """
     Default TPM normalization
@@ -245,7 +245,6 @@ def compute_tpm(input_counts):
     tpm = input_counts.copy()
     sc.pp.normalize_total(tpm, target_sum=1e6)
     return tpm
-
 
 # def factorize_mp_signature(args):
 #     """
@@ -257,7 +256,7 @@ def compute_tpm(input_counts):
 #     """
 #     args[2].factorize(worker_i=args[0],  total_workers=args[1])
 
-def fit_H_online(
+def fit_H_online_mu(
     X,
     W,
     H_init=None,
@@ -387,8 +386,125 @@ def fit_H_online(
     #     return pd.DataFrame(H_np, index=X_index, columns=comp_labels)
     return H_np
 
-class cNMF():
+def fit_H_online_hals(
+    X,
+    W,
+    H_init=None,
+    chunk_size=5000,
+    chunk_max_iter=200,
+    h_tol=0.05,
+    l1_reg_H=0.0,
+    l2_reg_H=0.0,
+    epsilon=1e-16,
+    device="cpu"
+    ):
+    """
+    Online HALS update to fit H only given fixed W, matching MU solver signature.
 
+    Parameters
+    ----------
+    X : np.ndarray, shape (n_samples, n_features)
+        Non-negative data matrix.
+    W : np.ndarray, shape (n_components, n_features)
+        Fixed basis matrix.
+    H_init : np.ndarray or None
+        Initial guess for H; random if None.
+    chunk_size : int
+        Number of rows per online chunk.
+    chunk_max_iter : int
+        Max HALS sweeps per chunk (maps to original chunk_max_iter).
+    h_tol : float
+        Chunk-level convergence tolerance (maps to original h_tol).
+    l1_reg_H : float
+        Ignored (HALS does not use L1).
+    l2_reg_H : float
+        Ignored (HALS does not use L2).
+    epsilon : float
+        Ignored (HALS does not use epsilon).
+    device : str
+        Torch device, e.g. "cpu" or "cuda".
+
+    Returns
+    -------
+    np.ndarray, shape (n_samples, n_components)
+        Fitted coefficient matrix H.
+    """
+
+    # Detect pandas inputs
+    X_df = isinstance(X, pd.DataFrame)
+    W_df = isinstance(W, pd.DataFrame)
+
+    # Extract numpy arrays and remember labels
+    X_index = None
+    if X_df:
+        X_index = X.index
+        X = X.values
+        
+    W_index=None
+    if W_df:
+        comp_labels = list(W.index)
+        W = W.values
+    else:
+        comp_labels = [f"comp_{i}" for i in range(W.shape[0])]
+
+    # Handle H_init labels if provided
+    if isinstance(H_init, pd.DataFrame):
+        H_index = H_init.index
+        H_init = H_init.values
+    else:
+        H_index = X_index if X_df else None
+
+    if sp.issparse(X):
+        X = X.toarray()
+
+    # Move to torch
+    dev = torch.device(device)
+    dtype = torch.float32
+    X_t = torch.from_numpy(X).to(device=dev, dtype=dtype)
+    W_t = torch.from_numpy(W).to(device=dev, dtype=dtype)
+
+    n, _ = X_t.shape
+    k, _ = W_t.shape
+
+    # Initialize H
+    if H_init is None:
+        H_t = torch.rand((n, k), device=dev, dtype=dtype)
+    else:
+        H_t = torch.from_numpy(H_init).to(device=dev, dtype=dtype).clamp(min=0.0)
+
+    # Precompute squared norms of W rows
+    W_norm_sq = (W_t * W_t).sum(dim=1)  # shape (k,)
+
+    # Online chunked HALS
+    idx = 0
+    while idx < n:
+        sl = slice(idx, idx + chunk_size)
+        X_chunk = X_t[sl, :]           # (chunk, features)
+        H_chunk = H_t[sl, :]           # (chunk, components)
+
+        # Precompute X W^T for this chunk
+        XW = X_chunk @ W_t.T           # (chunk, components)
+
+        for _ in range(chunk_max_iter):
+            H_prev = H_chunk.clone()
+            for j in range(k):
+                # Compute contribution of other components
+                WWj = (W_t @ W_t[j].T)  # shape (k,)
+                resid = XW[:, j] - (H_chunk @ WWj) + H_chunk[:, j] * W_norm_sq[j]
+                # HALS update for component j
+                H_chunk[:, j] = torch.clamp(resid / W_norm_sq[j], min=0.0)
+            # Check convergence for this chunk
+            rel_change = torch.norm(H_chunk - H_prev) / (torch.norm(H_prev) + 1e-16)
+            if rel_change < h_tol:
+                break
+
+        H_t[sl] = H_chunk
+        idx += chunk_size
+
+    return H_t.cpu().numpy()
+
+
+class cNMF():
 
     def __init__(self, output_dir=".", name=None):
         """
@@ -411,7 +527,6 @@ class cNMF():
         self.name = name
         self.paths = None
         self._initialize_dirs()
-
 
     def _initialize_dirs(self):
         if self.paths is None:
@@ -454,15 +569,20 @@ class cNMF():
                 'k_selection_stats' :  os.path.join(self.output_dir, self.name, self.name+'.k_selection_stats.df.npz'),
             }
 
-
-    def prepare(self, counts_fn, components, n_iter = 100, densify=False, tpm_fn=None, seed=None,
-                        beta_loss='frobenius',num_highvar_genes=2000, genes_file=None,
-                        alpha_usage=0.0, alpha_spectra=0.0, init='random', 
-                        total_workers=-1, use_gpu=False, mode = 'online', batch_size=5000, max_NMF_iter=1000, algo: str = "halsvar"):
+    def prepare(self, counts_fn,components, n_iter = 100, densify=False, tpm_fn=None,  num_highvar_genes=2000, genes_file=None,
+                        init: str = "nndsvdar", beta_loss: Union[str, float] = "frobenius",
+                        algo: str = "halsvar", mode: str = "batch",tol: float = 1e-4, n_jobs=-1,
+                        seed=None,use_gpu: bool = False,
+                        alpha_usage=0.0, alpha_spectra=0.0, 
+                        l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
+                        online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
+                        fp_precision: Union[str, torch.dtype] = "float",
+                        batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
+                        online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200
+                        ):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
         Prepare file for distributing jobs over workers.
-
 
         Parameters
         ----------
@@ -488,12 +608,12 @@ class cNMF():
             Seed for sklearn random state.
             
         beta_loss: ``str`` or ``float``
-        Beta loss between the given matrix X and its approximation calculated by HW, which is used as the metric to be minimized during the computation.
-        It can be a string from options:
-            - ``frobenius``: L2 distance, same as ``beta_loss=2.0``.
-            - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
-            - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
-        Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
+            Beta loss between the given matrix X and its approximation calculated by HW, which is used as the metric to be minimized during the computation.
+            It can be a string from options:
+                - ``frobenius``: L2 distance, same as ``beta_loss=2.0``.
+                - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
+                - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
+            Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
 
         num_highvar_genes : int or None, optional (default=2000)
             If provided and genes_file is None, will compute this many highvar genes to use for factorization
@@ -502,27 +622,23 @@ class cNMF():
             If provided will load high-variance genes from a list of these genes
             
         alpha_usage : float, optional (default=0.0)
-            Regularization parameter for NMF corresponding to alpha_W in scikit-learn
+            Regularization parameter for NMF corresponding to alpha_W  
 
         alpha_spectra : float, optional (default=0.0)
-            Regularization parameter for NMF corresponding to alpha_H in scikit-learn
-        
-        total_workers : int, optional (default=-1)
-            Number of cpu cores to use. By default all are used.
+            Regularization parameter for NMF corresponding to alpha_H 
 
-        use_gpuL bool, optional (default=False)
+        use_gpu: bool, optional (default=False)
             Whether to use GPU.
 
         mode: ``str``, optional, default: ``batch``
-        Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
-        For other beta loss, it switches back to ``batch`` method.
+            Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
+            For other beta loss, it switches back to ``batch`` method.
 
         batch_size : int, optional (default=5000)
             Batch size for online NMF leaning.
 
         max_NMF_iter : int, optional (default=1000)
             Maximum number of iterations per individual NMF run
-
 
         solver: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
@@ -532,6 +648,53 @@ class cNMF():
             ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
             
             If mode is online, there is no difference between ``hals`` and ``halsvar``.
+
+        init: ``str``, optional, default: ``nndsvdar``
+            Method for initialization on H and W matrices. Available options are: ``random``, ``nndsvd``, ``nndsvda``, ``nndsvdar``.
+
+        tol: ``float``, optional, default: ``1e-4``
+            The toleration used for convergence check.
+    
+        n_jobs: ``int``, optional, default: ``-1``
+            Number of cpu threads to use. If -1, use PyTorch's default setting.
+
+        use_gpu: ``bool``, optional, default: ``False``
+            If ``True``, use GPU if available. Otherwise, use CPU only.
+
+        l1_ratio_usage: ``float``, optional, default: ``0.0``
+            The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on W is (1 - l1_ratio_W).
+
+        l1_ratio_spectra: ``float``, optional, default: ``0.0``
+            The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on H is (1 - l1_ratio_H).
+
+        fp_precision: ``str``, optional, default: ``float``
+            The numeric precision on the results.
+            If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
+            Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
+
+        batch_max_iter: ``int``, optional, default: ``500``
+            The maximum number of iterations to perform for batch learning.
+
+        batch_hals_tol: ``float``, optional, default: ``0.05``
+            For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+
+        batch_hals_max_iter: ``int``, optional, default: ``200``
+            Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+
+        online_max_pass: ``int``, optional, default: ``20``
+            The maximum number of online passes of all data to perform.
+
+        online_chunk_size: ``int``, optional, default: ``5000``
+            The chunk / mini-batch size for online learning.
+
+        online_chunk_max_iter: ``int``, optional, default: ``200``
+            The maximum number of iterations for updating H or W in online learning.
+
+        l1_ratio_spectra: ``float``, optional, default: 0.05
+            The tolerance for updating H in each chunk in online learning.
+
+        online_usage_tol: ``float``, optional, default: 0.05
+            The tolerance for updating W in each chunk in online learning.
         """
         
         
@@ -608,15 +771,17 @@ class cNMF():
                                                high_variance_genes_filter=highvargenes)
 
         self.save_norm_counts(norm_counts)
-        (replicate_params, run_params) = self.get_nmf_iter_params(ks=components, n_iter=n_iter, random_state_seed=seed,
-                                                                  beta_loss=beta_loss, alpha_usage=alpha_usage,
-                                                                  alpha_spectra=alpha_spectra, init=init, 
-                                                                  total_workers=total_workers, use_gpu=use_gpu,
-                                                                  batch_size=batch_size, max_iter=max_NMF_iter, algo = algo,
-                                                                  mode = mode)
+        (replicate_params, run_params) = self.get_nmf_iter_params(ks=components, n_iter=n_iter, random_state_seed=seed,init=init, beta_loss=beta_loss, 
+                                                                  algo = algo, mode = mode, tol = tol, n_jobs=n_jobs, use_gpu=use_gpu,
+                                                                  alpha_usage=alpha_usage,alpha_spectra=alpha_spectra,
+                                                                  l1_ratio_usage=l1_ratio_usage, l1_ratio_spectra=l1_ratio_spectra,
+                                                                  online_usage_tol=online_usage_tol, online_spectra_tol=online_spectra_tol,
+                                                                  fp_precision=fp_precision,
+                                                                  batch_max_iter=batch_max_iter, batch_hals_tol=batch_hals_tol, batch_hals_max_iter=batch_hals_max_iter,
+                                                                  online_max_pass=online_max_pass, online_chunk_size=online_chunk_size,online_chunk_max_iter=online_chunk_max_iter
+                                                                  )
         self.save_nmf_iter_params(replicate_params, run_params)
         
-    
     def combine(self, components=None, skip_missing_files=False):
         """
         Combine NMF iterations for the same value of K
@@ -639,8 +804,6 @@ class cNMF():
 
         for k in ks:
             self.combine_nmf(k, skip_missing_files=skip_missing_files)    
-    
-    
     
     def get_norm_counts(self, counts, tpm,
                          high_variance_genes_filter = None,
@@ -713,41 +876,117 @@ class cNMF():
         
         return(norm_counts)
 
-    
     def save_norm_counts(self, norm_counts):
         self._initialize_dirs()
         sc.write(self.paths['normalized_counts'], norm_counts)
 
-        
-    def get_nmf_iter_params(self, ks, n_iter = 100,
-                               random_state_seed = None,
-                               beta_loss = beta_loss,
-                               alpha_usage=0.0, alpha_spectra=0.0,
-                               init='random', total_workers=-1, 
-                               use_gpu=False, batch_size=5000, 
-                               max_iter=1000, algo = "halsvar", mode = 'online'):
+    def get_nmf_iter_params(self, ks, n_iter = 100, random_state_seed = None, init: str = "nndsvdar",
+                            beta_loss: Union[str, float] = "frobenius",algo: str = "halsvar", mode: str = "batch",
+                            tol: float = 1e-4, n_jobs=-1,seed=None,use_gpu: bool = False,
+                            alpha_usage=0.0, alpha_spectra=0.0, 
+                            l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
+                            online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
+                            fp_precision: Union[str, torch.dtype] = "float",
+                            batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
+                            online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200):
         """
         Create a DataFrame with parameters for NMF iterations.
 
 
         Parameters
         ----------
-        ks : integer, or list-like.
-            Number of topics (components) for factorization.
-            Several values can be specified at the same time, which will be run independently.
-
+        ks : list or numpy array
+            Values of K to run NMF for
+            
         n_iter : integer, optional (defailt=100)
             Number of iterations for factorization. If several ``k`` are specified, this many
             iterations will be run for each value of ``k``.
-
+            
         random_state_seed : int or None, optional (default=None)
             Seed for sklearn random state.
             
+        beta_loss: ``str`` or ``float``
+            Beta loss between the given matrix X and its approximation calculated by HW, which is used as the metric to be minimized during the computation.
+            It can be a string from options:
+                - ``frobenius``: L2 distance, same as ``beta_loss=2.0``.
+                - ``kullback-leibler``:KL divergence, same as ``beta_loss=1.0``.
+                - ``itakura-saito``: Itakura-Saito divergence, same as ``beta_loss=0``.
+            Alternatively, it can also be a float number, which gives the beta parameter of the beta loss to be used.
+            
         alpha_usage : float, optional (default=0.0)
-            Regularization parameter for NMF corresponding to alpha_W in scikit-learn
+            Regularization parameter for NMF corresponding to alpha_W  
 
         alpha_spectra : float, optional (default=0.0)
-            Regularization parameter for NMF corresponding to alpha_H in scikit-learn
+            Regularization parameter for NMF corresponding to alpha_H  
+        
+        n_jobs : int, optional (default=-1)
+            Number of cpu cores to use. By default all are used.
+
+        use_gpu: bool, optional (default=False)
+            Whether to use GPU.
+
+        mode: ``str``, optional, default: ``batch``
+            Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
+            For other beta loss, it switches back to ``batch`` method.
+
+        batch_size : int, optional (default=5000)
+            Batch size for online NMF leaning.
+
+        max_NMF_iter : int, optional (default=1000)
+            Maximum number of iterations per individual NMF run
+
+        algo: str, optional (default='halsvar')
+            algo: ``str``, optional, default: ``halsvar``
+            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), 
+            ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
+            ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1.
+            ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
+            
+            If mode is online, there is no difference between ``hals`` and ``halsvar``.
+
+        init: ``str``, optional, default: ``nndsvdar``
+            Method for initialization on H and W matrices. Available options are: ``random``, ``nndsvd``, ``nndsvda``, ``nndsvdar``.
+
+        tol: ``float``, optional, default: ``1e-4``
+            The toleration used for convergence check.
+
+        use_gpu: ``bool``, optional, default: ``False``
+            If ``True``, use GPU if available. Otherwise, use CPU only.
+
+        l1_ratio_usage: ``float``, optional, default: ``0.0``
+            The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on W is (1 - l1_ratio_W).
+
+        l1_ratio_spectra: ``float``, optional, default: ``0.0``
+            The ratio of L1 penalty on W, must be between 0 and 1. And thus the ratio of L2 penalty on H is (1 - l1_ratio_H).
+
+        fp_precision: ``str``, optional, default: ``float``
+            The numeric precision on the results.
+            If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
+            Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
+
+        batch_max_iter: ``int``, optional, default: ``500``
+            The maximum number of iterations to perform for batch learning.
+
+        batch_hals_tol: ``float``, optional, default: ``0.05``
+            For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
+
+        batch_hals_max_iter: ``int``, optional, default: ``200``
+            Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
+
+        online_max_pass: ``int``, optional, default: ``20``
+            The maximum number of online passes of all data to perform.
+
+        online_chunk_size: ``int``, optional, default: ``5000``
+            The chunk / mini-batch size for online learning.
+
+        online_chunk_max_iter: ``int``, optional, default: ``200``
+            The maximum number of iterations for updating H or W in online learning.
+
+        l1_ratio_spectra: ``float``, optional, default: 0.05
+            The tolerance for updating H in each chunk in online learning.
+
+        online_usage_tol: ``float``, optional, default: 0.05
+            The tolerance for updating W in each chunk in online learning.
         """
 
         if type(ks) is int:
@@ -776,19 +1015,26 @@ class cNMF():
             warnings.warn(message, UserWarning)
 
         _nmf_kwargs = dict(
+                        init=init,
+                        beta_loss=beta_loss,
+                        algo = algo, 
+                        mode = mode,
+                        tol = tol, 
+                        n_jobs=n_jobs,
+                        use_gpu = use_gpu,
                         alpha_W=alpha_spectra, # W, H are switched w.r.t. sklearn
                         alpha_H=alpha_usage,
-                        l1_ratio_H=0.0,
-                        l1_ratio_W=0.0,
-                        beta_loss=beta_loss,
-                        tol=1e-4,
-                        mode=mode,
-                        online_chunk_max_iter=max_iter,
-                        online_chunk_size=batch_size,
-                        init=init,
-                        n_jobs=total_workers,
-                        use_gpu=use_gpu,
-                        algo = algo
+                        l1_ratio_W=alpha_spectra,
+                        l1_ratio_H=l1_ratio_usage,
+                        online_w_tol= online_spectra_tol,
+                        online_h_tol = online_usage_tol,
+                        fp_precision = fp_precision,
+                        batch_max_iter = batch_max_iter,
+                        batch_hals_tol=batch_hals_tol,
+                        batch_hals_max_iter =batch_hals_max_iter,
+                        online_max_pass = online_max_pass,
+                        online_chunk_size=online_chunk_size,
+                        online_chunk_max_iter=online_chunk_max_iter
                         )
         
         ## Coordinate descent is faster than multiplicative update but only works for frobenius
@@ -796,7 +1042,6 @@ class cNMF():
         #     _nmf_kwargs['solver'] = 'cd'
 
         return(replicate_params, _nmf_kwargs)
-    
     
     def update_nmf_iter_params(self):
         """
@@ -815,13 +1060,11 @@ class cNMF():
         
         self.save_nmf_iter_params(replicate_params, _nmf_kwargs)
 
-
     def save_nmf_iter_params(self, replicate_params, run_params):
         self._initialize_dirs()
         save_df_to_npz(replicate_params, self.paths['nmf_replicate_parameters'])
         with open(self.paths['nmf_run_parameters'], 'w') as F:
             yaml.dump(run_params, F)
-
 
     def _nmf(self, X, nmf_kwargs):
         """
@@ -841,7 +1084,6 @@ class cNMF():
 
         return(spectra, usages)
 
-
     # def factorize_multi_process(self, total_workers):
     #     """
     #     multiproces wrapper for nmf.factorize()
@@ -856,7 +1098,6 @@ class cNMF():
     #         p.close()
     #         p.join()    
   
-    
     def factorize(self,
                 worker_i=0, total_workers=1, skip_completed_runs=False,
                 ):
@@ -912,7 +1153,6 @@ class cNMF():
                                    columns=norm_counts.var.index)
             save_df_to_npz(spectra, self.paths['iter_spectra'] % (p['n_components'], p['iter']))
 
-
     def combine_nmf(self, k, skip_missing_files=False, remove_individual_iterations=False):
         run_params = load_df_from_npz(self.paths['nmf_replicate_parameters'])
         print('Combining factorizations for k=%d.'%k)
@@ -940,8 +1180,7 @@ class cNMF():
             print('No spectra found for k=%d' % k)
         return combined_spectra
     
-    
-    def refit_usage(self, X, spectra, algo, usage=None):
+    def refit_usage(self, X, spectra, usage=None):
         """
         Takes an input data matrix and a fixed spectra and uses NNLS to find the optimal
         usage matrix. Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'].
@@ -980,9 +1219,10 @@ class cNMF():
             else:
                 print("CUDA is not available on your machine. Use CPU mode instead.")
 
+
         # Refit usages (denoted H here)
-        if algo == 'mu':
-            rf_usages = fit_H_online(
+        if refit_nmf_kwargs['algo']=='mu':
+            rf_usages = fit_H_online_mu(
                             X,
                             spectra,
                             H_init=usage,
@@ -994,16 +1234,26 @@ class cNMF():
                             epsilon = 1e-16,
                             device = device_type
                             )
-        elif algo == 'halsvar':
-            rf_usages = spectra  #for now halsvar updater not avaliable 
+        elif refit_nmf_kwargs['algo']=='halsvar':
+            rf_usages = fit_H_online_hals(
+                            X,
+                            spectra,
+                            H_init=usage,
+                            chunk_size= refit_nmf_kwargs['online_chunk_size'],
+                            chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
+                            h_tol= 0.05,
+                            l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
+                            l2_reg_H = 0.0,
+                            epsilon = 1e-16,
+                            device = device_type
+                            )
         else:
-            rf_usages = spectra 
-            print("The algo updater is not avaliable, return orginal value")
+            raise ValueError('Please choose a supported solver!')
 
         return (rf_usages)
     
     
-    def refit_spectra(self, X, usage, algo):
+    def refit_spectra(self, X, usage):
         """
         Takes an input data matrix and a fixed usage matrix and uses NNLS to find the optimal
         spectra matrix. Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'].
@@ -1018,8 +1268,7 @@ class cNMF():
         usage : pandas.DataFrame or numpy.ndarray, cells X programs
             Non-negative spectra of expression programs
         """
-        return(self.refit_usage(X.T, usage.T, algo = algo).T)
-
+        return(self.refit_usage(X.T, usage.T).T)
 
     def consensus(self, k, density_threshold=0.5, local_neighborhood_size=0.30, show_clustering=True,
                   build_ref=True, skip_density_and_return_after_stats=False, close_clustergram_fig=False,
@@ -1068,9 +1317,6 @@ class cNMF():
             most users
         """
         
-        _nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
-        algo = _nmf_kwargs['algo']
-
         
         merged_spectra = load_df_from_npz(self.paths['merged_spectra']%k)
         if norm_counts is None:
@@ -1120,7 +1366,7 @@ class cNMF():
         median_spectra = (median_spectra.T/median_spectra.sum(1)).T
 
         # Obtain reconstructed count matrix by re-fitting usage and computing dot product: usage.dot(spectra)
-        rf_usages = self.refit_usage(norm_counts.X, median_spectra, algo)
+        rf_usages = self.refit_usage(norm_counts.X, median_spectra)
         rf_usages = pd.DataFrame(rf_usages, index=norm_counts.obs.index, columns=median_spectra.index)     
         
         if skip_density_and_return_after_stats:
@@ -1153,7 +1399,7 @@ class cNMF():
         # with usages fixed and TPM as the input matrix
         tpm = sc.read(self.paths['tpm'])
         tpm_stats = load_df_from_npz(self.paths['tpm_stats'])
-        spectra_tpm = self.refit_spectra(tpm.X, norm_usages.astype(tpm.X.dtype), algo)
+        spectra_tpm = self.refit_spectra(tpm.X, norm_usages.astype(tpm.X.dtype))
         spectra_tpm = pd.DataFrame(spectra_tpm, index=rf_usages.columns, columns=tpm.var.index)
         if normalize_tpm_spectra:
             spectra_tpm = spectra_tpm.div(spectra_tpm.sum(axis=1), axis=0) * 1e6
@@ -1175,7 +1421,7 @@ class cNMF():
             spectra_tpm_rf = spectra_tpm.loc[:,hvgs]
 
             spectra_tpm_rf = spectra_tpm_rf.div(tpm_stats.loc[hvgs, '__std'], axis=1)
-            rf_usages = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype),algo)
+            rf_usages = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype))
             rf_usages = pd.DataFrame(rf_usages, index=norm_counts.obs.index, columns=spectra_tpm_rf.index)                                                                  
                
         save_df_to_npz(median_spectra, self.paths['consensus_spectra']%(k, density_threshold_repl))
@@ -1284,8 +1530,7 @@ class cNMF():
                 
         if build_ref:
             self.build_reference(k, density_threshold)
-                
-                
+                           
     def build_reference(self, k, density_threshold=0.5, target_sum=1e6):
         '''
         Builds reference GEPs for use with starCAT using the results from "consensus" step. 
@@ -1318,7 +1563,6 @@ class cNMF():
         
         save_df_to_npz(ref_spectra, self.paths['starcat_spectra']%(k, density_threshold_repl))
         save_df_to_text(ref_spectra, self.paths['starcat_spectra__txt']%(k, density_threshold_repl))
-
 
     def k_selection_plot(self, close_fig=False):
         '''
@@ -1360,8 +1604,7 @@ class cNMF():
         fig.savefig(self.paths['k_selection_plot'], dpi=250)
         if close_fig:
             plt.close(fig)
-            
-            
+                    
     def load_results(self, K, density_threshold, n_top_genes=100, norm_usage = True):
         """
         Loads normalized usages and gene_spectra_scores for a given choice of K and 
@@ -1412,7 +1655,6 @@ class cNMF():
         
         top_genes = pd.DataFrame(top_genes, index=spectra_scores.columns).T
         return(usage, spectra_scores, spectra_tpm, top_genes)
-
 
 def main():
     """
@@ -1498,7 +1740,6 @@ def main():
 
     elif args.command == 'k_selection_plot':
         cnmf_obj.k_selection_plot(close_fig=True)
-
 
 if __name__=="__main__":
     main()
