@@ -1234,7 +1234,7 @@ class cNMF():
                             epsilon = 1e-16,
                             device = device_type
                             )
-        elif refit_nmf_kwargs['algo']=='halsvar':
+        elif refit_nmf_kwargs['algo']=='halsvar' or 'bbp' or 'hals':
             rf_usages = fit_H_online_hals(
                             X,
                             spectra,
