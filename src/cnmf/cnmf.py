@@ -1117,23 +1117,14 @@ class cNMF():
         skip_completed_runs : boolean (default=False),
             If true, skips files that have already completed. Run self.update_nmf_iter_params() to update
             the ledger of completed runs first if setting to True.
-
-        Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'], defaults below::
-
-            ``non_negative_factorization`` default arguments:
-                alpha=0.0
-                l1_ratio=0.0
-                beta_loss='kullback-leibler'
-                solver='mu'
-                tol=1e-4,
-                max_iter=200
-                regularization=None
-                init='random'
-                random_state, n_components are both set by the prespecified self.paths['nmf_replicate_parameters'].
         """
         run_params = load_df_from_npz(self.paths['nmf_replicate_parameters'])
         norm_counts = sc.read(self.paths['normalized_counts'])
         _nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
+
+        # Alexandra's note: on GPU based torch cNMF, no pararallism allowed worker reset to 1 and ID reset to 0
+        total_worker = 1
+        worker_i = 0
 
         if not skip_completed_runs:
             jobs_for_this_worker = worker_filter(range(len(run_params)), worker_i, total_workers)
@@ -1234,7 +1225,7 @@ class cNMF():
                             epsilon = 1e-16,
                             device = device_type
                             )
-        elif refit_nmf_kwargs['algo']=='halsvar' or 'bbp' or 'hals':
+        elif refit_nmf_kwargs['algo']=='halsvar' or 'bpp' or 'hals':
             rf_usages = fit_H_online_hals(
                             X,
                             spectra,
