@@ -572,13 +572,13 @@ class cNMF():
     def prepare(self, counts_fn,components, n_iter = 100, densify=False, tpm_fn=None,  num_highvar_genes=2000, genes_file=None,
                         init: str = "nndsvdar", beta_loss: Union[str, float] = "frobenius",
                         algo: str = "halsvar", mode: str = "batch",tol: float = 1e-4, n_jobs=-1,
-                        seed=None,use_gpu: bool = False,
+                        seed=42, use_gpu: bool = False,
                         alpha_usage=0.0, alpha_spectra=0.0, 
                         l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
                         online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
                         fp_precision: Union[str, torch.dtype] = "float",
                         batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
-                        online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200
+                        online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200, shuffle_cells = False
                         ):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
@@ -695,6 +695,10 @@ class cNMF():
 
         online_usage_tol: ``float``, optional, default: 0.05
             The tolerance for updating W in each chunk in online learning.
+
+
+        shuffle_cells: ``bool``, optionalm default: False
+            Shuffle cell orders to do online learning is recommanded
         """
         
         
@@ -719,7 +723,12 @@ class cNMF():
                                        obs=pd.DataFrame(index=input_counts.index),
                                        var=pd.DataFrame(index=input_counts.columns))
 
-                
+
+        if shuffle_cells:
+            input_counts = sc.pp.subsample(input_counts, fraction=1.0, random_state=seed, copy=True)
+            print("input data is shuffled")
+
+
         if sp.issparse(input_counts.X) & densify:
             input_counts.X = np.array(input_counts.X.todense())
  
