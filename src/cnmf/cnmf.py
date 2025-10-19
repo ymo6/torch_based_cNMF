@@ -10,9 +10,12 @@ import yaml
 import subprocess
 import scipy.sparse as sp
 import warnings
+from scipy.sparse import issparse
+
+
 
 from scipy.spatial.distance import squareform
-# from sklearn.decomposition import non_negative_factorization
+from sklearn.decomposition import non_negative_factorization
 import torch
 from nmf import run_nmf
 from sklearn.cluster import KMeans
@@ -526,6 +529,8 @@ class cNMF():
             name = '%s_%s' % (now.strftime("%Y_%m_%d"), rand_hash)
         self.name = name
         self.paths = None
+        self.sk_cd_refit = True # default value
+        self.seed = 14
         self._initialize_dirs()
 
     def _initialize_dirs(self):
@@ -578,7 +583,8 @@ class cNMF():
                         online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
                         fp_precision: Union[str, torch.dtype] = "float",
                         batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
-                        online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200, shuffle_cells = False
+                        online_max_pass: int = 20, online_chunk_size: int = 5000, online_chunk_max_iter: int = 200, 
+                        shuffle_cells = False, sk_cd_refit=True
                         ):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
@@ -633,12 +639,6 @@ class cNMF():
         mode: ``str``, optional, default: ``batch``
             Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
             For other beta loss, it switches back to ``batch`` method.
-
-        batch_size : int, optional (default=5000)
-            Batch size for online NMF leaning.
-
-        max_NMF_iter : int, optional (default=1000)
-            Maximum number of iterations per individual NMF run
 
         solver: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
@@ -697,8 +697,12 @@ class cNMF():
             The tolerance for updating W in each chunk in online learning.
 
 
-        shuffle_cells: ``bool``, optionalm default: False
+        shuffle_cells: ``bool``, optional default: False
             Shuffle cell orders to do online learning is recommanded
+
+
+        sk_cd_refit: ``bool``, optional default: False
+            reuse sklearn solver and function to perform refit step     
         """
         
         
@@ -724,9 +728,17 @@ class cNMF():
                                        var=pd.DataFrame(index=input_counts.columns))
 
 
+        #Alexandra's edit to add new methods: 
+
         if shuffle_cells:
             input_counts = sc.pp.subsample(input_counts, fraction=1.0, random_state=seed, copy=True)
             print("input data is shuffled")
+
+        self.sk_cd_refit = sk_cd_refit # store parameter for later use in refit
+        self.seed = seed
+
+        if n_iter < 2:
+            print("Warming: n_iter < 2 will cause consensus function to crash when calculating stability")
 
 
         if sp.issparse(input_counts.X) & densify:
@@ -938,12 +950,6 @@ class cNMF():
             Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
             For other beta loss, it switches back to ``batch`` method.
 
-        batch_size : int, optional (default=5000)
-            Batch size for online NMF leaning.
-
-        max_NMF_iter : int, optional (default=1000)
-            Maximum number of iterations per individual NMF run
-
         algo: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
             Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), 
@@ -1033,7 +1039,7 @@ class cNMF():
                         use_gpu = use_gpu,
                         alpha_W=alpha_spectra, # W, H are switched w.r.t. sklearn
                         alpha_H=alpha_usage,
-                        l1_ratio_W=alpha_spectra,
+                        l1_ratio_W=l1_ratio_spectra,
                         l1_ratio_H=l1_ratio_usage,
                         online_w_tol= online_spectra_tol,
                         online_h_tol = online_usage_tol,
@@ -1210,6 +1216,50 @@ class cNMF():
         elif not (isinstance(beta_loss, int) or isinstance(beta_loss, float)):
             raise ValueError("beta_loss must be a valid value: either from ['frobenius', 'kullback-leibler', 'itakura-saito'], or a numeric value.")
 
+
+        if self.sk_cd_refit:
+
+            if type(spectra) is pd.DataFrame:
+                H = spectra.values
+            else:
+                H = spectra
+
+            if type(X) is pd.DataFrame:
+                X = X.values
+            elif issparse(X):
+                X = X.toarray()
+            else:
+                X = X
+
+            # Convert sparse matrix to dense array if needed
+            if hasattr(X, 'toarray'):
+                X = X.toarray()
+
+            H = H.astype(X.dtype)
+
+            (rf_usages, spectra, niter)   = non_negative_factorization(
+                X, 
+                H=H, 
+                n_components =spectra.shape[0],  
+                update_H=False, 
+                init= refit_nmf_kwargs['init'],
+                solver="cd", 
+                beta_loss=beta_loss, 
+                tol=refit_nmf_kwargs['tol'], 
+                max_iter=refit_nmf_kwargs['batch_hals_max_iter'],
+                alpha_W=refit_nmf_kwargs['alpha_W'], 
+                alpha_H=refit_nmf_kwargs['alpha_H'],
+                l1_ratio= refit_nmf_kwargs['l1_ratio_W'],
+                random_state=self.seed
+            )
+
+            if (type(X) is pd.DataFrame) and (type(spectra) is pd.DataFrame):
+                rf_usages = pd.DataFrame(rf_usages, index=X.index, columns=spectra.index)
+            
+            return(rf_usages)
+
+
+
         # Choose device
         device_type = 'cpu'
         if refit_nmf_kwargs['use_gpu']:
@@ -1228,9 +1278,9 @@ class cNMF():
                             H_init=usage,
                             chunk_size= refit_nmf_kwargs['online_chunk_size'],
                             chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
-                            h_tol= 0.05,
+                            h_tol= refit_nmf_kwargs['online_h_tol'],
                             l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
-                            l2_reg_H = 0.0,
+                            l2_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             epsilon = 1e-16,
                             device = device_type
                             )
@@ -1241,14 +1291,18 @@ class cNMF():
                             H_init=usage,
                             chunk_size= refit_nmf_kwargs['online_chunk_size'],
                             chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
-                            h_tol= 0.05,
+                            h_tol= refit_nmf_kwargs['online_h_tol'],
                             l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
-                            l2_reg_H = 0.0,
+                            l2_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             epsilon = 1e-16,
                             device = device_type
                             )
         else:
             raise ValueError('Please choose a supported solver!')
+
+        if (type(X) is pd.DataFrame) and (type(spectra) is pd.DataFrame):
+            rf_usages = pd.DataFrame(rf_usages, index=X.index, columns=spectra.index)
+            
 
         return (rf_usages)
     
