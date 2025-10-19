@@ -1218,6 +1218,7 @@ class cNMF():
 
 
         if self.sk_cd_refit:
+            print("Using sklearn nmf coordinate descent to refit")
 
             if type(spectra) is pd.DataFrame:
                 H = spectra.values
@@ -1256,6 +1257,8 @@ class cNMF():
             if (type(X) is pd.DataFrame) and (type(spectra) is pd.DataFrame):
                 rf_usages = pd.DataFrame(rf_usages, index=X.index, columns=spectra.index)
             
+            print("sklearn refit completed")
+            
             return(rf_usages)
 
 
@@ -1272,6 +1275,8 @@ class cNMF():
 
         # Refit usages (denoted H here)
         if refit_nmf_kwargs['algo']=='mu':
+            print("Using torch nmf multiplicative update to refit")
+
             rf_usages = fit_H_online_mu(
                             X,
                             spectra,
@@ -1284,7 +1289,11 @@ class cNMF():
                             epsilon = 1e-16,
                             device = device_type
                             )
+            print("multiplicative update refit completed")
+
         elif refit_nmf_kwargs['algo']=='halsvar' or 'bpp' or 'hals':
+            print("Using torch nmf hierarchical alternative least square to refit")
+
             rf_usages = fit_H_online_hals(
                             X,
                             spectra,
@@ -1297,6 +1306,8 @@ class cNMF():
                             epsilon = 1e-16,
                             device = device_type
                             )
+            print("hierarchical alternative least square refit completed")
+
         else:
             raise ValueError('Please choose a supported solver!')
 
