@@ -11,6 +11,7 @@ import subprocess
 import scipy.sparse as sp
 import warnings
 from scipy.sparse import issparse
+import muon as mu
 
 
 
@@ -575,7 +576,7 @@ class cNMF():
             }
 
     def prepare(self, counts_fn,components, n_iter = 100, densify=False, tpm_fn=None,  num_highvar_genes=2000, genes_file=None,
-                        init: str = "nndsvdar", beta_loss: Union[str, float] = "frobenius",
+                        beta_loss: Union[str, float] = "frobenius", init: str = "random",
                         algo: str = "halsvar", mode: str = "batch",tol: float = 1e-4, n_jobs=-1,
                         seed=42, use_gpu: bool = False,
                         alpha_usage=0.0, alpha_spectra=0.0, 
@@ -649,11 +650,11 @@ class cNMF():
             
             If mode is online, there is no difference between ``hals`` and ``halsvar``.
 
-        init: ``str``, optional, default: ``nndsvdar``
-            Method for initialization on H and W matrices. Available options are: ``random``, ``nndsvd``, ``nndsvda``, ``nndsvdar``.
-
         tol: ``float``, optional, default: ``1e-4``
             The toleration used for convergence check.
+
+        init: ``str'', optional, defualt: ``random``
+            Way to initialize NMF matrices 
     
         n_jobs: ``int``, optional, default: ``-1``
             Number of cpu threads to use. If -1, use PyTorch's default setting.
@@ -743,7 +744,24 @@ class cNMF():
 
         if sp.issparse(input_counts.X) & densify:
             input_counts.X = np.array(input_counts.X.todense())
- 
+
+        # check genes with zero variance (includes zero expression genes)
+        if sp.issparse(input_counts.X):
+            gene_means = np.array(input_counts.X.mean(axis=0)).flatten()
+            gene_vars = np.array(input_counts.X.power(2).mean(axis=0)).flatten() - gene_means**2
+        else:
+            gene_vars = input_counts.X.var(axis=0, ddof=1)
+
+        zero_variance_genes = gene_vars == 0
+        n_zero_var = zero_variance_genes.sum()
+        print(f"Number of genes with zero variance: {n_zero_var}")
+
+        # remove genes with zero variance
+        if n_zero_var > 0:
+            zero_var_gene_names = input_counts.var_names[zero_variance_genes]
+            input_counts = input_counts[:, ~zero_variance_genes].copy()
+            print(f"Genes with zero variance removed: {zero_var_gene_names.tolist()}")
+  
         if tpm_fn is None:
             tpm = compute_tpm(input_counts)
             sc.write(self.paths['tpm'], tpm)
@@ -792,12 +810,12 @@ class cNMF():
                                                high_variance_genes_filter=highvargenes)
 
         self.save_norm_counts(norm_counts)
-        (replicate_params, run_params) = self.get_nmf_iter_params(ks=components, n_iter=n_iter, random_state_seed=seed,init=init, beta_loss=beta_loss, 
+        (replicate_params, run_params) = self.get_nmf_iter_params(ks=components, n_iter=n_iter, random_state_seed=seed, beta_loss=beta_loss, init = init,
                                                                   algo = algo, mode = mode, tol = tol, n_jobs=n_jobs, use_gpu=use_gpu,
                                                                   alpha_usage=alpha_usage,alpha_spectra=alpha_spectra,
                                                                   l1_ratio_usage=l1_ratio_usage, l1_ratio_spectra=l1_ratio_spectra,
                                                                   online_usage_tol=online_usage_tol, online_spectra_tol=online_spectra_tol,
-                                                                  fp_precision=fp_precision,
+                                                                  fp_precision=fp_precision, 
                                                                   batch_max_iter=batch_max_iter, batch_hals_tol=batch_hals_tol, batch_hals_max_iter=batch_hals_max_iter,
                                                                   online_max_pass=online_max_pass, online_chunk_size=online_chunk_size,online_chunk_max_iter=online_chunk_max_iter
                                                                   )
@@ -883,7 +901,7 @@ class cNMF():
         else:
             norm_counts.X /= norm_counts.X.std(axis=0, ddof=1)
             if np.isnan(norm_counts.X).sum().sum() > 0:
-                print('Warning NaNs in normalized counts matrix')                    
+                print('Warning NaNs in normalized counts matrix')   
         
         ## Save a \n-delimited list of the high-variance genes used for factorization
         with open(self.paths['nmf_genes_list'], 'w') as F:
@@ -901,7 +919,7 @@ class cNMF():
         self._initialize_dirs()
         sc.write(self.paths['normalized_counts'], norm_counts)
 
-    def get_nmf_iter_params(self, ks, n_iter = 100, random_state_seed = None, init: str = "nndsvdar",
+    def get_nmf_iter_params(self, ks, n_iter = 100, random_state_seed = None, init = "random",
                             beta_loss: Union[str, float] = "frobenius",algo: str = "halsvar", mode: str = "batch",
                             tol: float = 1e-4, n_jobs=-1,seed=None,use_gpu: bool = False,
                             alpha_usage=0.0, alpha_spectra=0.0, 
@@ -1030,12 +1048,12 @@ class cNMF():
             warnings.warn(message, UserWarning)
 
         _nmf_kwargs = dict(
-                        init=init,
                         beta_loss=beta_loss,
                         algo = algo, 
                         mode = mode,
                         tol = tol, 
                         n_jobs=n_jobs,
+                        init=init,
                         use_gpu = use_gpu,
                         alpha_W=alpha_spectra, # W, H are switched w.r.t. sklearn
                         alpha_H=alpha_usage,
