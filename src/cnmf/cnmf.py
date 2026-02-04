@@ -12,6 +12,7 @@ import scipy.sparse as sp
 import warnings
 from scipy.sparse import issparse
 import muon as mu
+from torch.utils.data import Dataset, DataLoader
 
 
 
@@ -506,7 +507,168 @@ def fit_H_online_hals(
         idx += chunk_size
 
     return H_t.cpu().numpy()
+    
+'''
+def fit_H_online_hals_DL(
+    X,
+    W,
+    H_init=None,
+    chunk_size=5000,
+    chunk_max_iter=200,
+    h_tol=0.05,
+    l1_reg_H=0.0,
+    l2_reg_H=0.0,
+    epsilon=1e-16,
+    device="cpu",
+    dtype = torch.single,
+    n_jobs = -1
+    ):
+    """
+    Online HALS update to fit H only given fixed W, matching MU solver signature.
 
+    Parameters
+    ----------
+    X : np.ndarray, shape (n_samples, n_features)
+        Non-negative data matrix.
+    W : np.ndarray, shape (n_components, n_features)
+        Fixed basis matrix.
+    H_init : np.ndarray or None
+        Initial guess for H; random if None.
+    chunk_size : int
+        Number of rows per online chunk.
+    chunk_max_iter : int
+        Max HALS sweeps per chunk (maps to original chunk_max_iter).
+    h_tol : float
+        Chunk-level convergence tolerance (maps to original h_tol).
+    l1_reg_H : float
+        Ignored (HALS does not use L1).
+    l2_reg_H : float
+        Ignored (HALS does not use L2).
+    epsilon : float
+        Ignored (HALS does not use epsilon).
+    device : str
+        Torch device, e.g. "cpu" or "cuda".
+
+    Returns
+    -------
+    np.ndarray, shape (n_samples, n_components)
+        Fitted coefficient matrix H.
+    """
+
+    # define dataloader for use 
+    class NMFDataset(Dataset):
+        def __init__(self, X: Union[np.ndarray, torch.Tensor], chunk_size: int, dtype: torch.dtype):
+            if isinstance(X, np.ndarray):
+                self.X_cpu = torch.from_numpy(X).to(dtype=dtype)
+            else:
+                self.X_cpu = X.cpu().to(dtype=dtype)
+
+            self.chunk_size = chunk_size
+            self.n_samples = self.X_cpu.shape[0]
+            self.n_chunks = (self.n_samples + chunk_size - 1) // chunk_size
+
+        def __len__(self):
+            return self.n_chunks
+
+        def __getitem__(self, idx):
+            start_idx = idx * self.chunk_size
+            end_idx = min(start_idx + self.chunk_size, self.n_samples)
+            indices = torch.arange(start_idx, end_idx)
+            return self.X_cpu[start_idx:end_idx], indices, start_idx
+
+    dataset = NMFDataset(
+        X=X,
+        chunk_size=chunk_size,
+        dtype=dtype
+    )
+
+    num_workers = max(0, n_jobs) if n_jobs != -1 else 0
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=(num_workers > 0)
+    )
+
+    # Detect pandas inputs
+    X_df = isinstance(X, pd.DataFrame)
+    W_df = isinstance(W, pd.DataFrame)
+
+    # Extract numpy arrays and remember labels
+    X_index = None
+    if X_df:
+        X_index = X.index
+        X = X.values
+        
+    W_index=None
+
+    if W_df:
+        comp_labels = list(W.index)
+        W = W.values
+    else:
+        comp_labels = [f"comp_{i}" for i in range(W.shape[0])]
+
+    # Handle H_init labels if provided
+    if isinstance(H_init, pd.DataFrame):
+        H_index = H_init.index
+        H_init = H_init.values
+    else:
+        H_index = X_index if X_df else None
+
+    if sp.issparse(X):
+        X = X.toarray()
+
+    # Move to torch
+    dev = torch.device(device)
+    X_t = torch.from_numpy(X).to(device=dev, dtype=dtype)
+    W_t = torch.from_numpy(W).to(device=dev, dtype=dtype)
+
+    n, _ = X_t.shape
+    k, _ = W_t.shape
+
+    # Initialize H
+    if H_init is None:
+        H_t = torch.rand((n, k), device=dev, dtype=dtype)
+    else:
+        H_t = torch.from_numpy(H_init).to(device=dev, dtype=dtype).clamp(min=0.0)
+
+    # Precompute squared norms of W rows
+    W_norm_sq = (W_t * W_t).sum(dim=1)  # shape (k,)
+
+    # Online chunked HALS
+    idx = 0
+    for chunk_data, chunk_indices, start_pos in dataloader:
+        sl = slice(idx, idx + chunk_size)
+        X_chunk =chunk_data.squeeze(0).to(device)            # (chunk, features)
+        idx = chunk_indices.squeeze(0) 
+        cur_chunksize = idx.shape[0]
+        
+        H_chunk = H_t[idx, :]           # (chunk, components)
+
+        # Precompute X W^T for this chunk
+        XW = X_chunk @ W_t.T           # (chunk, components)
+
+        for _ in range(chunk_max_iter):
+            H_prev = H_chunk.clone()
+            for j in range(k):
+                # Compute contribution of other components
+                WWj = (W_t @ W_t[j].T)  # shape (k,)
+                resid = XW[:, j] - (H_chunk @ WWj) + H_chunk[:, j] * W_norm_sq[j]
+                # HALS update for component j
+                H_chunk[:, j] = torch.clamp(resid / W_norm_sq[j], min=0.0)
+            # Check convergence for this chunk
+            rel_change = torch.norm(H_chunk - H_prev) / (torch.norm(H_prev) + 1e-16)
+            if rel_change < h_tol:
+                break
+
+        H_t[sl] = H_chunk
+        idx += chunk_size
+
+    return H_t.cpu().numpy()
+'''
 
 class cNMF():
 
@@ -585,7 +747,7 @@ class cNMF():
                         fp_precision: Union[str, torch.dtype] = "float",
                         batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
                         online_max_pass: int = 20, online_chunk_size: int = 5000, online_chunk_max_iter: int = 200, 
-                        shuffle_cells = False, sk_cd_refit=True
+                        shuffle_cells = False, sk_cd_refit=True,nmf_seeds = None
                         ):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
@@ -637,9 +799,10 @@ class cNMF():
         use_gpu: bool, optional (default=False)
             Whether to use GPU.
 
-        mode: ``str``, optional, default: ``batch``
+        mode: ``str``, optional, default: ``batch`` 
             Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
             For other beta loss, it switches back to ``batch`` method.
+            "dataloader": use dataloader with online mode
 
         solver: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
@@ -704,6 +867,11 @@ class cNMF():
 
         sk_cd_refit: ``bool``, optional default: False
             reuse sklearn solver and function to perform refit step     
+
+
+        nmf_seeds: None or ndarray of integer
+            Match the number of NMF replicates, that's the seed to randomly intialize H and W matrix for NMF
+
         """
         
         
@@ -736,7 +904,14 @@ class cNMF():
             print("input data is shuffled")
 
         self.sk_cd_refit = sk_cd_refit # store parameter for later use in refit
-        self.seed = seed
+        self.seed = seed # seed to generate all NMF seeds
+
+        if nmf_seeds is not None: 
+
+            if len(nmf_seeds) != n_iter:
+                raise ValueError("len of nmf_seeds must equal to number of n_iter ")
+
+        self.nmf_seeds = nmf_seeds # all NMF seeds can be given as well
 
         if n_iter < 2:
             print("Warming: n_iter < 2 will cause consensus function to crash when calculating stability")
@@ -1030,8 +1205,12 @@ class cNMF():
 
         n_runs = len(ks)* n_iter
 
-        np.random.seed(seed=random_state_seed)
-        nmf_seeds = np.random.randint(low=1, high=(2**31)-1, size=n_runs)
+        # if seeds list is not given, gnereate, else, take the given ones
+        if self.nmf_seeds is None:
+            np.random.seed(seed=random_state_seed)
+            nmf_seeds = np.random.randint(low=1, high=(2**31)-1, size=n_runs)
+        else: 
+            nmf_seeds = self.nmf_seeds
 
         replicate_params = []
         for i, (k, r) in enumerate(itertools.product(k_list, range(n_iter))):
