@@ -1,6 +1,6 @@
 ### <code style="color : red">Notice: This is a fork of the cNMF repo with the core scikit-learn NMF implementation switched out for nmf-torch.</code>
 * Singularity Container can be found in https://hub.docker.com/r/igvf/torch-cnmf/tags
-* Make sure to install the right nmf-torch in https://github.com/ymo6/nmf-torch.git
+* Make sure to install the right nmf-torch in https://github.com/ymo6/nmf-torch.git for modified cNMF
 
 # Consensus NMF (cNMF)
 
