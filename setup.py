@@ -14,16 +14,16 @@ def get_version():
         return locals['__version__']
 
 setuptools.setup(
-    name="cnmf",
+    name="torch-cnmf",
     version=get_version(),
-    author="Dylan Kotliar",
-    author_email="dylkot@gmail.com",
-    description="Consensus NMF for scRNA-Seq data",
+    author="Alexandra Mo",
+    author_email="ymo@stanford.edu",
+    description="Torch consensus NMF for scRNA-Seq data",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/dylkot/cNMF",
+    url="https://github.com/EngreitzLab/cNMF_benchmarking/tree/main/cNMF_benchmarking_pipeline/Inference/torch-cNMF",
     project_urls={
-        "Bug Tracker": "https://github.com/dylkot/cNMF/issues",
+        "Bug Tracker": "https://github.com/EngreitzLab/cNMF_benchmarking/tree/main/cNMF_benchmarking_pipeline/Inference/torch-cNMF",
     },
     classifiers=[
         "Programming Language :: Python :: 3.9",
@@ -38,15 +38,14 @@ setuptools.setup(
         ],
     },
     install_requires=[
-    'nmf-torch',
-   'scikit-learn>=1.0',
-   'anndata>=0.9',
-   'scanpy',
-   'pandas',
-   'numpy',
-   'matplotlib',
-   'palettable',
-   'scipy',
-   'pyyaml'
+    'scikit-learn>=1.0',
+    'anndata>=0.9',
+    'scanpy',
+    'pandas',
+    'numpy',
+    'matplotlib',
+    'palettable',
+    'scipy',
+    'pyyaml'
    ]
 )
