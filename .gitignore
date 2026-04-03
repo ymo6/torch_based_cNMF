@@ -105,3 +105,6 @@ venv.bak/
 
 # Claude
 .claude/
+
+# Data files
+*.h5ad
