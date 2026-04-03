@@ -4,11 +4,7 @@
 
 # torch-cnmf: GPU-Accelerated Consensus NMF
 
-<img src="https://storage.googleapis.com/sabeti-public/dkotliar/elife-cNMF-fig1.jpg" style="height: 800px;" />
-
-torch-cnmf is a PyTorch-based implementation of Consensus NMF (cNMF) for inferring gene expression programs (GEPs) from scRNA-Seq data. It takes a count matrix (N cells X G genes) as input and produces a (K x G) matrix of gene expression programs and a (N x K) matrix specifying the usage of each program for each cell. This fork replaces the original scikit-learn NMF with [nmf-torch](https://github.com/ymo6/nmf-torch.git), enabling GPU acceleration, multiple NMF algorithms, and mini-batch/online learning modes for large-scale datasets.
-
-Read more about the cNMF method in the [publication](https://elifesciences.org/articles/43803) and check out examples on [simulated data](Tutorials/analyze_simulated_example_data.ipynb) and [PBMCs](Tutorials/analyze_pbmc_example_data.ipynb).
+Based on the cNMF method described in [Kotliar et al., eLife 2019](https://elifesciences.org/articles/43803).
 
 ## Key Features
 
@@ -36,13 +32,6 @@ Or install from source (editable):
 git clone https://github.com/ymo6/torch_based_cNMF.git
 cd torch_based_cNMF
 pip install -e .
-```
-
-If you want to use the batch correction preprocessing, you also need to install the [Python implementation of Harmony](https://github.com/slowkow/harmonypy) and scikit-misc
-
-```bash
-pip install harmonypy
-pip install scikit-misc
 ```
 
 # Running cNMF
@@ -161,83 +150,14 @@ Additional parameters for fine-tuning NMF behavior:
 - `--shuffle`: Enable shuffling across mini-batches
 - `--sk-cd-refit`: Use scikit-learn coordinate descent for refitting (default: False)
 
-# Integration of technical variables and batches
-
-We have implemented a pipeline to integrate batch variables prior to running cNMF and to handle ADTs in CITE-Seq. It uses an adaptation of [Harmony](https://github.com/slowkow/harmonypy) that corrects the underlying count matrix rather than principal components. We describe it in our [recent preprint](https://www.biorxiv.org/content/10.1101/2024.05.03.592310v1). See the [batch correction tutorial](Tutorials/analyze_batcheffectcorrect_BaronEtAl.ipynb) as well for an example.
-
-We use a separate Preprocess class to run batch correction. You pass in an AnnData object, as well as harmony_vars, a list of the names of variables to correct correspond to columns in the AnnData obs attribute. You also specify an output file base name to save the results to like below:
-
-```
-from torch_cnmf import cNMF, Preprocess
-#Initialize the Preprocess object
-p = Preprocess(random_seed=14)
-
-#Batch correct the data and save the corrected high-variance gene data to adata_c, and the TPM normalized data to adata_tpm
-(adata_c, adata_tpm, hvgs) = p.preprocess_for_cnmf(adata, harmony_vars=['Sex', 'Sample'], n_top_rna_genes = 2000, librarysize_targetsum= 1e6,
-                                                    save_output_base='./example_islets/batchcorrect_example_sex')
-
-#Then run cNMF passing in the corrected counts file, tpm_fn, and HVGs as inputs
-cnmf_obj_corrected = cNMF(output_dir='./example_islets', name='BatchCorrected')
-cnmf_obj_corrected.prepare(counts_fn='./example_islets/batchcorrect_example.Corrected.HVG.Varnorm.h5ad',
-                           tpm_fn='./example_islets/batchcorrect_example.TP10K.h5ad',
-                           genes_file='./example_islets/batchcorrect_example.Corrected.HVGs.txt',
-                           components=[15], n_iter=20, seed=14, num_highvar_genes=2000)
-
-#Then proceed with the rest of cNMF as normal
-```
-
-# starCAT Reference Building
-
-Consensus GEP spectra can be exported as a reference for annotating new datasets using [starCAT](https://github.com/immunogenomics/starCAT). Pass `--build-reference` during the consensus step:
-
-```bash
-cnmf consensus --output-dir ./results --name mydata --components 10 \
-  --local-density-threshold 0.5 --build-reference
-```
-
-Or in Python:
-
-```python
-cnmf_obj.consensus(k=10, density_threshold=0.5, build_reference=True)
-```
-
 # Change log
 
-### New in version 1.7
-- Use scipy hierarchical clustering rather than fastcluster for compatibility with numpy>2.0
-- More efficient sparse + batched OLS computation uses significantly less memory
-- Implemented basic testing suite
-
-### New in version 1.6
-- Added option in consensus() to build spectra for annotating new datasets with GEPs using [starCAT](https://github.com/immunogenomics/starCAT).
-- Added option to factorize() to skip tasks that have already completed.
-
-### New in version 1.5
-- Fixed bug in detecting and printing cells with 0 counts of overdispersed genes
-- Added option in load_results() to return normalized or unnormalized usage.
-- Added a Preprocess class to batch correct data prior to cNMF. See the added Tutorial analyze_batcheffectcorrect_BaronEtAl.ipynb to illustrate its basic usage.
-- Now accepts 10x formatted .mtx directories (containing counts.mtx, barcodes.tsv, and genes.tsv files)
-
-### New in version 1.4
-- Usage is re-fit a final time from gene_spectra_tpm which increases accuracy in simulations
-- Use cnmf_obj.load_results(K=_, density_threshold=_) to obtain usage, spectra_scores, spectra_tpm, and top_genes matrices
-- cnmf_obj.combine() now has a skip_missing_files=True/False option to skip incomplete factorize iterations
-- GEPs are now ordered by maximum total usage
-- Now detects and errors when 0 counts of HVGs with interpretable error message
-
-### New in version 1.3
-- Installation via pip
-- Object oriented interface for Python users and command line script option via `cnmf`
-
-### New in version 1.2
- - Increased the threshold for ignoring genes with low mean expression for determining high-variance genes from a TPM of 0.01 to 0.5. Some users were identifying uninterpretable programs with very low usage except in a tiny number of cells. We suspect that this was due to including genes as high-variance that are detected in a small number of cells. This change in the default parameter will help offset that problem in most cases.
- - Updated import of NMF for compatibility with scikit-learn versions >22
- - Colorbar for heatmaps included with consensus matrix plot
-
-### New in version 1.1
- - Now operates by default on sparse matrices. Use --densify option in prepare step if data is not sparse
- - Now takes Scanpy AnnData object files (.h5ad) as input
- - Now has option to use KL divergence beta_loss instead of Frobenius. Frobenius is the default because it is much faster.
- - Includes a Docker file for creating a Docker container to run cNMF in parallel with cloud compute
- - Includes a tutorial on a simple PBMC dataset
- - Other minor fixes
+### Version 1.0.0
+- Initial release of torch-cnmf, forked from cNMF with PyTorch-based NMF backend
+- GPU acceleration via nmf-torch with automatic CPU fallback
+- Multiple NMF algorithms: MU, HALS, HALS-variant, BPP
+- Three learning modes: batch, mini-batch, and DataLoader-based online learning
+- Flexible loss functions: Frobenius, KL divergence, Itakura-Saito
+- L1/L2 regularization on usage and spectra matrices
+- Efficient sparse + batched OLS computation
+- Basic testing suite
