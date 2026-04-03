@@ -58,9 +58,6 @@ def check_dir_exists(path):
         if exception.errno != errno.EEXIST:
             raise
 
-def worker_filter(iterable, worker_index, total_workers):
-    return (p for i,p in enumerate(iterable) if (i-worker_index)%total_workers==0)
-
 def efficient_ols_all_cols(X, Y, batch_size=1024, normalize_y=False):
     """
     Solve OLS: Beta = (X^T X)^{-1} X^T Y,
@@ -250,16 +247,6 @@ def compute_tpm(input_counts):
     tpm = input_counts.copy()
     sc.pp.normalize_total(tpm, target_sum=1e6)
     return tpm
-
-# def factorize_mp_signature(args):
-#     """
-#     wrapper around factorize to be able to use mp pool.
-#     args is a list:
-#     worker-i: int
-#     total_workers: int
-#     pointer to nmf object.
-#     """
-#     args[2].factorize(worker_i=args[0],  total_workers=args[1])
 
 class NMFDataset(Dataset):
     """PyTorch Dataset for NMF data. Returns (sample_row, index) per item;
@@ -1286,36 +1273,12 @@ class cNMF():
 
         return(spectra, usages)
 
-    # def factorize_multi_process(self, total_workers):
-    #     """
-    #     multiproces wrapper for nmf.factorize()
-    #     factorize_multi_process() is direct wrapper around factorize to be able to launch it form mp.
-    #     total_workers: int; number of workers to use.
-    #     """
-    #     list_args = [(x, total_workers, self) for x in range(total_workers)]
-        
-    #     with Pool(total_workers) as p:
-            
-    #         p.map(factorize_mp_signature, list_args)
-    #         p.close()
-    #         p.join()    
-  
-    def factorize(self,
-                worker_i=0, total_workers=1, skip_completed_runs=False,
-                ):
+    def factorize(self, skip_completed_runs=False):
         """
         Iteratively run NMF with prespecified parameters.
 
-        Use the `worker_i` and `total_workers` parameters for parallelization.
-        
         Parameters
         ----------
-        worker_i : int (default=0)
-            index of worker who's jobs will be executed
-            
-        total_workers : int (default=1),
-            total number of workers for jobs to be distributed over
-            
         skip_completed_runs : boolean (default=False),
             If true, skips files that have already completed. Run self.update_nmf_iter_params() to update
             the ledger of completed runs first if setting to True.
@@ -1324,19 +1287,14 @@ class cNMF():
         norm_counts = sc.read(self.paths['normalized_counts'])
         _nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
 
-        # Alexandra's note: on GPU based torch cNMF, no pararallism allowed worker reset to 1 and ID reset to 0
-        total_worker = 1
-        worker_i = 0
-
         if not skip_completed_runs:
-            jobs_for_this_worker = worker_filter(range(len(run_params)), worker_i, total_workers)
+            jobs = range(len(run_params))
         else:
-            jobs_for_this_worker = worker_filter(run_params.index[run_params['completed']==False],
-                                                 worker_i, total_workers)
-    
-        for idx in jobs_for_this_worker:
+            jobs = run_params.index[run_params['completed']==False]
+
+        for idx in jobs:
             p = run_params.iloc[idx, :]
-            print('[Worker %d]. Starting task %d.' % (worker_i, idx))
+            print('Starting task %d.' % idx)
             _nmf_kwargs['random_state'] = p['nmf_seed']
             _nmf_kwargs['n_components'] = p['n_components']
 
@@ -1932,10 +1890,6 @@ def main():
 
         python cnmf.py factorize  --name test --output-dir $output_dir
 
-        THis can be parallelized as such:
-
-        python cnmf.py factorize  --name test --output-dir $output_dir --total-workers 2 --worker-index WORKER_INDEX (where worker_index starts with 0)
-
         python cnmf.py combine  --name test --output-dir $output_dir
 
         python cnmf.py consensus  --name test --output-dir $output_dir
@@ -1951,7 +1905,6 @@ def main():
     parser.add_argument('-c', '--counts', type=str, help='[prepare] Input (cell x gene) counts matrix as .h5ad, .mtx, df.npz, or tab delimited text file')
     parser.add_argument('-k', '--components', type=int, help='[prepare] Numper of components (k) for matrix factorization. Several can be specified with "-k 8 9 10"', nargs='+')
     parser.add_argument('-n', '--n-iter', type=int, help='[prepare] Number of factorization replicates', default=100)
-    parser.add_argument('--total-workers', type=int, help='[all] Total number of workers to distribute jobs to', default=-1)
     parser.add_argument('--use_gpu', action='store_true', help='[prepare] Whether to use GPU.', default=False)
     parser.add_argument('--seed', type=int, help='[prepare] Seed for pseudorandom number generation', default=None)
     parser.add_argument('--genes-file', type=str, help='[prepare] File containing a list of genes to include, one gene per line. Must match column labels of counts matrix.', default=None)
@@ -1980,7 +1933,6 @@ def main():
     parser.add_argument('--minibatch-max-iter', type=int, help='[prepare] Max iterations for H/W update in minibatch (default 200)', default=200)
     parser.add_argument('--sk-cd-refit', action='store_true', help='[prepare] Reuse sklearn solver for refit step (default False)', default=False)
     parser.add_argument('--nmf-seeds', type=int, nargs='+', help='[prepare] Explicit list of NMF seeds to use', default=None)
-    # parser.add_argument('--worker-index', type=int, help='[factorize] Index of current worker (the first worker should have index 0)', default=0)
     parser.add_argument('--skip-completed-runs', action='store_true', help='[factorize] Skip previously completed runs. Must re-run prepare first to update completed runs', default=False)
     parser.add_argument('--local-density-threshold', type=float, help='[consensus] Threshold for the local density filtering. This string must convert to a float >0 and <=2', default=0.5)
     parser.add_argument('--local-neighborhood-size', type=float, help='[consensus] Fraction of the number of replicates to use as nearest neighbors for local density filtering', default=0.30)
