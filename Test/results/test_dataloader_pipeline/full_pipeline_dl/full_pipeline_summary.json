@@ -1,0 +1,1 @@
+{"mode": "dataloader", "K": 3, "n_iter": 10, "usage_shape": [80, 3], "spectra_scores_shape": [200, 3], "spectra_tpm_shape": [200, 3], "top_genes_shape": [100, 3], "status": "PASSED"}

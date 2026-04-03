@@ -1,0 +1,5 @@
+=== Device info ===
+CUDA available: True
+Device: NVIDIA L40S
+===================
+/oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/bin/python: No module named pytest

@@ -4,3 +4,38 @@ requires = [
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "torch-cnmf"
+version = "1.7.0"
+description = "Torch-based cNMF adapted from Dylan Kotliar's cNMF"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Alexandra Mo", email = "ymo@stanford.edu"},
+]
+dependencies = [
+    "scikit-learn>=1.0",
+    "anndata>=0.9",
+    "scanpy",
+    "pandas",
+    "numpy",
+    "matplotlib",
+    "palettable",
+    "scipy",
+    "pyyaml",
+    "torch",
+    "muon",
+    "nmf-torch",
+]
+
+[project.scripts]
+cnmf = "torch_cnmf:main"
+
+[project.urls]
+Homepage = "https://github.com/EngreitzLab/cNMF_benchmarking/tree/main/cNMF_benchmarking_pipeline/Inference/torch-cNMF"
+"Bug Tracker" = "https://github.com/EngreitzLab/cNMF_benchmarking/tree/main/cNMF_benchmarking_pipeline/Inference/torch-cNMF"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,1 @@
+{"mode": "dataloader", "minibatch_size": 500, "num_cells": 80, "K": 3, "usage_shape": [80, 3], "status": "PASSED"}

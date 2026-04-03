@@ -19,7 +19,7 @@ from torch.utils.data import Dataset, DataLoader
 from scipy.spatial.distance import squareform
 from sklearn.decomposition import non_negative_factorization
 import torch
-from nmf import run_nmf
+from nmf_torch import run_nmf
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.metrics.pairwise import euclidean_distances
@@ -260,6 +260,22 @@ def compute_tpm(input_counts):
 #     pointer to nmf object.
 #     """
 #     args[2].factorize(worker_i=args[0],  total_workers=args[1])
+
+class NMFDataset(Dataset):
+    """PyTorch Dataset for NMF data. Returns (sample_row, index) per item;
+    DataLoader handles batching via batch_size."""
+    def __init__(self, X: Union[np.ndarray, torch.Tensor], dtype: torch.dtype):
+        if isinstance(X, np.ndarray):
+            self.X_cpu = torch.from_numpy(X).to(dtype=dtype)
+        else:
+            self.X_cpu = X.cpu().to(dtype=dtype)
+        self.n_samples = self.X_cpu.shape[0]
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, idx):
+        return self.X_cpu[idx], idx
 
 def fit_H_online_mu(
     X,
@@ -507,8 +523,7 @@ def fit_H_online_hals(
         idx += chunk_size
 
     return H_t.cpu().numpy()
-    
-'''
+
 def fit_H_online_hals_DL(
     X,
     W,
@@ -520,78 +535,45 @@ def fit_H_online_hals_DL(
     l2_reg_H=0.0,
     epsilon=1e-16,
     device="cpu",
-    dtype = torch.single,
-    n_jobs = -1
+    dtype=torch.float32,
+    n_jobs=-1
     ):
     """
-    Online HALS update to fit H only given fixed W, matching MU solver signature.
+    Online HALS update to fit H only given fixed W, using PyTorch DataLoader
+    for memory-efficient batched processing.
 
     Parameters
     ----------
-    X : np.ndarray, shape (n_samples, n_features)
+    X : np.ndarray or pd.DataFrame, shape (n_samples, n_features)
         Non-negative data matrix.
-    W : np.ndarray, shape (n_components, n_features)
+    W : np.ndarray or pd.DataFrame, shape (n_components, n_features)
         Fixed basis matrix.
-    H_init : np.ndarray or None
+    H_init : np.ndarray or pd.DataFrame or None
         Initial guess for H; random if None.
     chunk_size : int
-        Number of rows per online chunk.
+        Batch size for DataLoader (number of rows per batch).
     chunk_max_iter : int
-        Max HALS sweeps per chunk (maps to original chunk_max_iter).
+        Max HALS sweeps per batch.
     h_tol : float
-        Chunk-level convergence tolerance (maps to original h_tol).
+        Batch-level convergence tolerance.
     l1_reg_H : float
-        Ignored (HALS does not use L1).
+        L1 regularization on H (optional).
     l2_reg_H : float
-        Ignored (HALS does not use L2).
+        L2 regularization on H (optional).
     epsilon : float
-        Ignored (HALS does not use epsilon).
+        Small constant (unused, kept for signature compatibility).
     device : str
         Torch device, e.g. "cpu" or "cuda".
+    dtype : torch.dtype
+        Tensor precision (default torch.float32).
+    n_jobs : int
+        Number of DataLoader workers. -1 uses 0 workers (main process).
 
     Returns
     -------
     np.ndarray, shape (n_samples, n_components)
         Fitted coefficient matrix H.
     """
-
-    # define dataloader for use 
-    class NMFDataset(Dataset):
-        def __init__(self, X: Union[np.ndarray, torch.Tensor], chunk_size: int, dtype: torch.dtype):
-            if isinstance(X, np.ndarray):
-                self.X_cpu = torch.from_numpy(X).to(dtype=dtype)
-            else:
-                self.X_cpu = X.cpu().to(dtype=dtype)
-
-            self.chunk_size = chunk_size
-            self.n_samples = self.X_cpu.shape[0]
-            self.n_chunks = (self.n_samples + chunk_size - 1) // chunk_size
-
-        def __len__(self):
-            return self.n_chunks
-
-        def __getitem__(self, idx):
-            start_idx = idx * self.chunk_size
-            end_idx = min(start_idx + self.chunk_size, self.n_samples)
-            indices = torch.arange(start_idx, end_idx)
-            return self.X_cpu[start_idx:end_idx], indices, start_idx
-
-    dataset = NMFDataset(
-        X=X,
-        chunk_size=chunk_size,
-        dtype=dtype
-    )
-
-    num_workers = max(0, n_jobs) if n_jobs != -1 else 0
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=1,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=(num_workers > 0)
-    )
 
     # Detect pandas inputs
     X_df = isinstance(X, pd.DataFrame)
@@ -602,8 +584,6 @@ def fit_H_online_hals_DL(
     if X_df:
         X_index = X.index
         X = X.values
-        
-    W_index=None
 
     if W_df:
         comp_labels = list(W.index)
@@ -621,54 +601,67 @@ def fit_H_online_hals_DL(
     if sp.issparse(X):
         X = X.toarray()
 
-    # Move to torch
+    # Create DataLoader — data stays on CPU, batches moved to device on demand
+    dataset = NMFDataset(X=X, dtype=dtype)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=chunk_size,
+        shuffle=False, #don't need to shuffle for refit 
+        num_workers=0, 
+        pin_memory=True,
+        drop_last=False,
+    )
+
+    # Move W to device, keep X on CPU (DataLoader handles batch transfer)
     dev = torch.device(device)
-    X_t = torch.from_numpy(X).to(device=dev, dtype=dtype)
     W_t = torch.from_numpy(W).to(device=dev, dtype=dtype)
 
-    n, _ = X_t.shape
-    k, _ = W_t.shape
+    n = X.shape[0]
+    k = W_t.shape[0]
 
-    # Initialize H
+    # Initialize H on device
     if H_init is None:
         H_t = torch.rand((n, k), device=dev, dtype=dtype)
     else:
         H_t = torch.from_numpy(H_init).to(device=dev, dtype=dtype).clamp(min=0.0)
 
-    # Precompute squared norms of W rows
-    W_norm_sq = (W_t * W_t).sum(dim=1)  # shape (k,)
+    # Precompute W @ W^T once (used for all batches)
+    WWT = W_t @ W_t.T
+    _zero = torch.tensor(0.0, dtype=dtype, device=dev)
 
-    # Online chunked HALS
-    idx = 0
-    for chunk_data, chunk_indices, start_pos in dataloader:
-        sl = slice(idx, idx + chunk_size)
-        X_chunk =chunk_data.squeeze(0).to(device)            # (chunk, features)
-        idx = chunk_indices.squeeze(0) 
-        cur_chunksize = idx.shape[0]
-        
-        H_chunk = H_t[idx, :]           # (chunk, components)
+    # Iterate through DataLoader batches
+    for x_batch, idx in dataloader:
+        x_batch = x_batch.to(dev)
+        idx = idx.to(dev)
+        h = H_t[idx, :]
 
-        # Precompute X W^T for this chunk
-        XW = X_chunk @ W_t.T           # (chunk, components)
+        xWT = x_batch @ W_t.T
 
-        for _ in range(chunk_max_iter):
-            H_prev = H_chunk.clone()
-            for j in range(k):
-                # Compute contribution of other components
-                WWj = (W_t @ W_t[j].T)  # shape (k,)
-                resid = XW[:, j] - (H_chunk @ WWj) + H_chunk[:, j] * W_norm_sq[j]
-                # HALS update for component j
-                H_chunk[:, j] = torch.clamp(resid / W_norm_sq[j], min=0.0)
-            # Check convergence for this chunk
-            rel_change = torch.norm(H_chunk - H_prev) / (torch.norm(H_prev) + 1e-16)
-            if rel_change < h_tol:
+        for j in range(chunk_max_iter):
+            cur_max = 0.0
+
+            for c in range(k):
+                numer = xWT[:, c] - h @ WWT[:, c]
+                if l1_reg_H > 0.0:
+                    numer -= l1_reg_H
+                if l2_reg_H > 0.0:
+                    denom = WWT[c, c] + l2_reg_H
+                    hvec = h[:, c] * (WWT[c, c] / denom) + numer / denom
+                else:
+                    hvec = h[:, c] + numer / WWT[c, c]
+                if torch.isnan(hvec).sum() > 0:
+                    hvec[:] = 0.0
+                else:
+                    hvec = hvec.maximum(_zero)
+                cur_max = max(cur_max, torch.abs(h[:, c] - hvec).max().item())
+                h[:, c] = hvec
+
+            if j + 1 < chunk_max_iter and cur_max / (h.mean().item() + 1e-16) < h_tol:
                 break
 
-        H_t[sl] = H_chunk
-        idx += chunk_size
+        H_t[idx, :] = h
 
     return H_t.cpu().numpy()
-'''
 
 class cNMF():
 
@@ -741,13 +734,14 @@ class cNMF():
                         beta_loss: Union[str, float] = "frobenius", init: str = "random",
                         algo: str = "halsvar", mode: str = "batch",tol: float = 1e-4, n_jobs=-1,
                         seed=42, use_gpu: bool = False,
-                        alpha_usage=0.0, alpha_spectra=0.0, 
+                        alpha_usage=0.0, alpha_spectra=0.0,
                         l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
-                        online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
+                        minibatch_usage_tol: float = 0.05, minibatch_spectra_tol: float = 0.05,
                         fp_precision: Union[str, torch.dtype] = "float",
-                        batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
-                        online_max_pass: int = 20, online_chunk_size: int = 5000, online_chunk_max_iter: int = 200, 
-                        shuffle_cells = False, sk_cd_refit=True,nmf_seeds = None
+                        batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
+                        minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
+                        minibatch_shuffle: bool = True,
+                        sk_cd_refit=True,nmf_seeds = None
                         ):
         """
         Load input counts, reduce to high-variance genes, and variance normalize genes.
@@ -800,18 +794,17 @@ class cNMF():
             Whether to use GPU.
 
         mode: ``str``, optional, default: ``batch`` 
-            Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
+            Learning mode. Choose from ``batch``, ``minibatch``, and ``dataloader``. Notice that ``minibatch`` and ``dataloader`` only work when ``beta=2.0``.
             For other beta loss, it switches back to ``batch`` method.
-            "dataloader": use dataloader with online mode
 
         solver: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
-            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), 
+            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square),
             ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
             ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1.
             ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
-            
-            If mode is online, there is no difference between ``hals`` and ``halsvar``.
+
+            If mode is minibatch, there is no difference between ``hals`` and ``halsvar``.
 
         tol: ``float``, optional, default: ``1e-4``
             The toleration used for convergence check.
@@ -836,8 +829,8 @@ class cNMF():
             If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
             Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
 
-        batch_max_iter: ``int``, optional, default: ``500``
-            The maximum number of iterations to perform for batch learning.
+        batch_max_epoch: ``int``, optional, default: ``500``
+            The maximum number of epochs to perform for batch learning.
 
         batch_hals_tol: ``float``, optional, default: ``0.05``
             For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
@@ -845,24 +838,21 @@ class cNMF():
         batch_hals_max_iter: ``int``, optional, default: ``200``
             Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
 
-        online_max_pass: ``int``, optional, default: ``20``
-            The maximum number of online passes of all data to perform.
+        minibatch_max_epoch: ``int``, optional, default: ``20``
+            The maximum number of minibatch passes of all data to perform.
 
-        online_chunk_size: ``int``, optional, default: ``5000``
-            The chunk / mini-batch size for online learning.
+        minibatch_size: ``int``, optional, default: ``5000``
+            The mini-batch size for minibatch learning.
 
-        online_chunk_max_iter: ``int``, optional, default: ``200``
-            The maximum number of iterations for updating H or W in online learning.
+        minibatch_max_iter: ``int``, optional, default: ``200``
+            The maximum number of iterations for updating H or W in minibatch learning.
 
-        l1_ratio_spectra: ``float``, optional, default: 0.05
-            The tolerance for updating H in each chunk in online learning.
+        minibatch_spectra_tol: ``float``, optional, default: 0.05
+            The tolerance for updating spectra (W) in each mini-batch.
 
-        online_usage_tol: ``float``, optional, default: 0.05
-            The tolerance for updating W in each chunk in online learning.
+        minibatch_usage_tol: ``float``, optional, default: 0.05
+            The tolerance for updating usages (H) in each mini-batch.
 
-
-        shuffle_cells: ``bool``, optional default: False
-            Shuffle cell orders to do online learning is recommanded
 
 
         sk_cd_refit: ``bool``, optional default: False
@@ -899,9 +889,6 @@ class cNMF():
 
         #Alexandra's edit to add new methods: 
 
-        if shuffle_cells:
-            input_counts = sc.pp.subsample(input_counts, fraction=1.0, random_state=seed, copy=True)
-            print("input data is shuffled")
 
         self.sk_cd_refit = sk_cd_refit # store parameter for later use in refit
         self.seed = seed # seed to generate all NMF seeds
@@ -989,10 +976,11 @@ class cNMF():
                                                                   algo = algo, mode = mode, tol = tol, n_jobs=n_jobs, use_gpu=use_gpu,
                                                                   alpha_usage=alpha_usage,alpha_spectra=alpha_spectra,
                                                                   l1_ratio_usage=l1_ratio_usage, l1_ratio_spectra=l1_ratio_spectra,
-                                                                  online_usage_tol=online_usage_tol, online_spectra_tol=online_spectra_tol,
-                                                                  fp_precision=fp_precision, 
-                                                                  batch_max_iter=batch_max_iter, batch_hals_tol=batch_hals_tol, batch_hals_max_iter=batch_hals_max_iter,
-                                                                  online_max_pass=online_max_pass, online_chunk_size=online_chunk_size,online_chunk_max_iter=online_chunk_max_iter
+                                                                  minibatch_usage_tol=minibatch_usage_tol, minibatch_spectra_tol=minibatch_spectra_tol,
+                                                                  fp_precision=fp_precision,
+                                                                  batch_max_epoch=batch_max_epoch, batch_hals_tol=batch_hals_tol, batch_hals_max_iter=batch_hals_max_iter,
+                                                                  minibatch_max_epoch=minibatch_max_epoch, minibatch_size=minibatch_size, minibatch_max_iter=minibatch_max_iter,
+                                                                  minibatch_shuffle=minibatch_shuffle
                                                                   )
         self.save_nmf_iter_params(replicate_params, run_params)
         
@@ -1097,12 +1085,13 @@ class cNMF():
     def get_nmf_iter_params(self, ks, n_iter = 100, random_state_seed = None, init = "random",
                             beta_loss: Union[str, float] = "frobenius",algo: str = "halsvar", mode: str = "batch",
                             tol: float = 1e-4, n_jobs=-1,seed=None,use_gpu: bool = False,
-                            alpha_usage=0.0, alpha_spectra=0.0, 
+                            alpha_usage=0.0, alpha_spectra=0.0,
                             l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
-                            online_usage_tol: float = 0.05, online_spectra_tol: float = 0.05,
+                            minibatch_usage_tol: float = 0.05, minibatch_spectra_tol: float = 0.05,
                             fp_precision: Union[str, torch.dtype] = "float",
-                            batch_max_iter: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
-                            online_max_pass: int = 20, online_chunk_size: int = 5000,online_chunk_max_iter: int = 200):
+                            batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
+                            minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
+                            minibatch_shuffle: bool = True):
         """
         Create a DataFrame with parameters for NMF iterations.
 
@@ -1140,17 +1129,17 @@ class cNMF():
             Whether to use GPU.
 
         mode: ``str``, optional, default: ``batch``
-            Learning mode. Choose from ``batch`` and ``online``. Notice that ``online`` only works when ``beta=2.0``.
+            Learning mode. Choose from ``batch``, ``minibatch``, and ``dataloader``. Notice that ``minibatch`` and ``dataloader`` only work when ``beta=2.0``.
             For other beta loss, it switches back to ``batch`` method.
 
         algo: str, optional (default='halsvar')
             algo: ``str``, optional, default: ``halsvar``
-            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square), 
+            Choose from ``mu`` (Multiplicative Update), ``hals`` (Hierarchical Alternative Least Square),
             ``halsvar`` (HALS variant) and ``bpp`` (alternative non-negative least squares with Block Principal Pivoting method).
             ``hals`` refers to the standard HALS algorithm and sets batch_hals_max_iter = 1.
             ``halsvar`` is the HALS variant that tries to mimic ``bpp`` and uses batch_hals_max_iter to tune the HALS iterations over H/W.
-            
-            If mode is online, there is no difference between ``hals`` and ``halsvar``.
+
+            If mode is minibatch, there is no difference between ``hals`` and ``halsvar``.
 
         init: ``str``, optional, default: ``nndsvdar``
             Method for initialization on H and W matrices. Available options are: ``random``, ``nndsvd``, ``nndsvda``, ``nndsvdar``.
@@ -1172,8 +1161,8 @@ class cNMF():
             If ``float``, set precision to ``torch.float``; if ``double``, set precision to ``torch.double``.
             Alternatively, choose Pytorch's `torch dtype <https://pytorch.org/docs/stable/tensor_attributes.html>`_ of your own.
 
-        batch_max_iter: ``int``, optional, default: ``500``
-            The maximum number of iterations to perform for batch learning.
+        batch_max_epoch: ``int``, optional, default: ``500``
+            The maximum number of epochs to perform for batch learning.
 
         batch_hals_tol: ``float``, optional, default: ``0.05``
             For HALS, we have the option of using HALS to mimic BPP for a possible better loss. The mimic works as follows: update H by HALS several iterations until the maximal relative change < batch_hals_tol. Then update W similarly.
@@ -1181,20 +1170,20 @@ class cNMF():
         batch_hals_max_iter: ``int``, optional, default: ``200``
             Maximal iterations of updating H & W for mimic BPP. If this parameter set to 1, it is the standard HALS.
 
-        online_max_pass: ``int``, optional, default: ``20``
-            The maximum number of online passes of all data to perform.
+        minibatch_max_epoch: ``int``, optional, default: ``20``
+            The maximum number of minibatch passes of all data to perform.
 
-        online_chunk_size: ``int``, optional, default: ``5000``
-            The chunk / mini-batch size for online learning.
+        minibatch_size: ``int``, optional, default: ``5000``
+            The mini-batch size for minibatch learning.
 
-        online_chunk_max_iter: ``int``, optional, default: ``200``
-            The maximum number of iterations for updating H or W in online learning.
+        minibatch_max_iter: ``int``, optional, default: ``200``
+            The maximum number of iterations for updating H or W in minibatch learning.
 
-        l1_ratio_spectra: ``float``, optional, default: 0.05
-            The tolerance for updating H in each chunk in online learning.
+        minibatch_spectra_tol: ``float``, optional, default: 0.05
+            The tolerance for updating spectra (W) in each mini-batch.
 
-        online_usage_tol: ``float``, optional, default: 0.05
-            The tolerance for updating W in each chunk in online learning.
+        minibatch_usage_tol: ``float``, optional, default: 0.05
+            The tolerance for updating usages (H) in each mini-batch.
         """
 
         if type(ks) is int:
@@ -1238,15 +1227,16 @@ class cNMF():
                         alpha_H=alpha_usage,
                         l1_ratio_W=l1_ratio_spectra,
                         l1_ratio_H=l1_ratio_usage,
-                        online_w_tol= online_spectra_tol,
-                        online_h_tol = online_usage_tol,
+                        minibatch_w_tol= minibatch_spectra_tol,
+                        minibatch_h_tol = minibatch_usage_tol,
                         fp_precision = fp_precision,
-                        batch_max_iter = batch_max_iter,
+                        batch_max_epoch = batch_max_epoch,
                         batch_hals_tol=batch_hals_tol,
                         batch_hals_max_iter =batch_hals_max_iter,
-                        online_max_pass = online_max_pass,
-                        online_chunk_size=online_chunk_size,
-                        online_chunk_max_iter=online_chunk_max_iter
+                        minibatch_max_epoch = minibatch_max_epoch,
+                        minibatch_size=minibatch_size,
+                        minibatch_max_iter=minibatch_max_iter,
+                        minibatch_shuffle=minibatch_shuffle
                         )
         
         ## Coordinate descent is faster than multiplicative update but only works for frobenius
@@ -1478,9 +1468,9 @@ class cNMF():
                             X,
                             spectra,
                             H_init=usage,
-                            chunk_size= refit_nmf_kwargs['online_chunk_size'],
-                            chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
-                            h_tol= refit_nmf_kwargs['online_h_tol'],
+                            chunk_size= refit_nmf_kwargs['minibatch_size'],
+                            chunk_max_iter = refit_nmf_kwargs['minibatch_max_iter'],
+                            h_tol= refit_nmf_kwargs['minibatch_h_tol'],
                             l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             l2_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             epsilon = 1e-16,
@@ -1488,22 +1478,24 @@ class cNMF():
                             )
             print("multiplicative update refit completed")
 
-        elif refit_nmf_kwargs['algo']=='halsvar' or 'bpp' or 'hals':
-            print("Using torch nmf hierarchical alternative least square to refit")
+        elif refit_nmf_kwargs['algo'] in ('halsvar', 'bpp', 'hals'):
+            if refit_nmf_kwargs['algo'] == 'bpp':
+                warnings.warn("BPP refit is not available. Falling back to HALS DataLoader refit.", UserWarning)
+            print("Using torch nmf HALS with DataLoader to refit")
 
-            rf_usages = fit_H_online_hals(
+            rf_usages = fit_H_online_hals_DL(
                             X,
                             spectra,
                             H_init=usage,
-                            chunk_size= refit_nmf_kwargs['online_chunk_size'],
-                            chunk_max_iter = refit_nmf_kwargs['online_chunk_max_iter'],
-                            h_tol= refit_nmf_kwargs['online_h_tol'],
-                            l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
-                            l2_reg_H = refit_nmf_kwargs['l1_ratio_H'],
-                            epsilon = 1e-16,
-                            device = device_type
+                            chunk_size=refit_nmf_kwargs['minibatch_size'],
+                            chunk_max_iter=refit_nmf_kwargs['minibatch_max_iter'],
+                            h_tol=refit_nmf_kwargs['minibatch_h_tol'],
+                            l1_reg_H=refit_nmf_kwargs['l1_ratio_H'],
+                            l2_reg_H=refit_nmf_kwargs['l1_ratio_H'],
+                            device=device_type,
+                            dtype=torch.float32,
                             )
-            print("hierarchical alternative least square refit completed")
+            print("HALS DataLoader refit completed")
 
         else:
             raise ValueError('Please choose a supported solver!')
@@ -1590,8 +1582,16 @@ class cNMF():
         density_threshold_repl = density_threshold_str.replace('.', '_')
         n_neighbors = int(local_neighborhood_size * merged_spectra.shape[0]/k)
 
+        # Drop all-zero spectra rows (dead components from minibatch/high-iter runs)
+        row_norms = np.sqrt((merged_spectra**2).sum(axis=1))
+        zero_mask = row_norms == 0
+        if zero_mask.any():
+            print(f"Dropping {zero_mask.sum()}/{len(merged_spectra)} all-zero spectra rows.")
+            merged_spectra = merged_spectra.loc[~zero_mask]
+            row_norms = row_norms[~zero_mask]
+
         # Rescale topics such to length of 1.
-        l2_spectra = (merged_spectra.T/np.sqrt((merged_spectra**2).sum(axis=1))).T
+        l2_spectra = (merged_spectra.T/row_norms).T
 
         if not skip_density_and_return_after_stats:
             # Compute the local density matrix (if not previously cached)
@@ -1613,6 +1613,7 @@ class cNMF():
                 del(distance_to_nearest_neighbors)
 
             density_filter = local_density.iloc[:, 0] < density_threshold
+            density_filter.index = l2_spectra.index
             l2_spectra = l2_spectra.loc[density_filter, :]
             if l2_spectra.shape[0] == 0:
                 raise RuntimeError("Zero components remain after density filtering. Consider increasing density threshold")
@@ -1956,11 +1957,29 @@ def main():
     parser.add_argument('--genes-file', type=str, help='[prepare] File containing a list of genes to include, one gene per line. Must match column labels of counts matrix.', default=None)
     parser.add_argument('--numgenes', type=int, help='[prepare] Number of high variance genes to use for matrix factorization.', default=2000)
     parser.add_argument('--tpm', type=str, help='[prepare] Pre-computed (cell x gene) TPM values as df.npz or tab separated txt file. If not provided TPM will be calculated automatically', default=None)
-    parser.add_argument('--max-nmf-iter', type=int, help='[prepare] Max number of iterations per individual NMF run (default 1000)', default=1000)
     parser.add_argument('--beta-loss', type=str, choices=['frobenius', 'kullback-leibler', 'itakura-saito'], help='[prepare] Loss function for NMF (default frobenius)', default='frobenius')
     parser.add_argument('--init', type=str, choices=['random', 'nndsvd'], help='[prepare] Initialization algorithm for NMF (default random)', default='random')
     parser.add_argument('--densify', dest='densify', help='[prepare] Treat the input data as non-sparse (default False)', action='store_true', default=False)
-    parser.add_argument('--batch_size', type=int, help='[prepare] Size of batch for online NMF learning.', default=5000) 
+    parser.add_argument('--batch_size', type=int, help='[prepare] Size of batch for online NMF learning.', default=5000)
+    parser.add_argument('--shuffle', dest='minibatch_shuffle', action='store_true', help='[prepare] Enable shuffling of samples across mini-batches each epoch.', default=False)
+    parser.add_argument('--algo', type=str, choices=['mu', 'hals', 'halsvar', 'bpp'], help='[prepare] NMF algorithm (default halsvar)', default='halsvar')
+    parser.add_argument('--mode', type=str, choices=['batch', 'minibatch', 'dataloader'], help='[prepare] Learning mode (default batch). minibatch and dataloader only work with frobenius loss.', default='batch')
+    parser.add_argument('--tol', type=float, help='[prepare] Tolerance for convergence check (default 1e-4)', default=1e-4)
+    parser.add_argument('--n-jobs', type=int, help='[prepare] Number of CPU threads. -1 uses PyTorch default.', default=-1)
+    parser.add_argument('--alpha-usage', type=float, help='[prepare] Regularization parameter for usage matrix W (default 0.0)', default=0.0)
+    parser.add_argument('--alpha-spectra', type=float, help='[prepare] Regularization parameter for spectra matrix H (default 0.0)', default=0.0)
+    parser.add_argument('--l1-ratio-usage', type=float, help='[prepare] L1 penalty ratio on W, between 0 and 1 (default 0.0)', default=0.0)
+    parser.add_argument('--l1-ratio-spectra', type=float, help='[prepare] L1 penalty ratio on H, between 0 and 1 (default 0.0)', default=0.0)
+    parser.add_argument('--minibatch-usage-tol', type=float, help='[prepare] Tolerance for updating usages in minibatch (default 0.05)', default=0.05)
+    parser.add_argument('--minibatch-spectra-tol', type=float, help='[prepare] Tolerance for updating spectra in minibatch (default 0.05)', default=0.05)
+    parser.add_argument('--fp-precision', type=str, choices=['float', 'double'], help='[prepare] Numeric precision (default float)', default='float')
+    parser.add_argument('--batch-max-epoch', type=int, help='[prepare] Max epochs for batch learning (default 500)', default=500)
+    parser.add_argument('--batch-hals-tol', type=float, help='[prepare] HALS tolerance for mimicking BPP (default 0.05)', default=0.05)
+    parser.add_argument('--batch-hals-max-iter', type=int, help='[prepare] Max HALS iterations for H/W update (default 200)', default=200)
+    parser.add_argument('--minibatch-max-epoch', type=int, help='[prepare] Max minibatch passes over all data (default 20)', default=20)
+    parser.add_argument('--minibatch-max-iter', type=int, help='[prepare] Max iterations for H/W update in minibatch (default 200)', default=200)
+    parser.add_argument('--sk-cd-refit', action='store_true', help='[prepare] Reuse sklearn solver for refit step (default False)', default=False)
+    parser.add_argument('--nmf-seeds', type=int, nargs='+', help='[prepare] Explicit list of NMF seeds to use', default=None)
     # parser.add_argument('--worker-index', type=int, help='[factorize] Index of current worker (the first worker should have index 0)', default=0)
     parser.add_argument('--skip-completed-runs', action='store_true', help='[factorize] Skip previously completed runs. Must re-run prepare first to update completed runs', default=False)
     parser.add_argument('--local-density-threshold', type=float, help='[consensus] Threshold for the local density filtering. This string must convert to a float >0 and <=2', default=0.5)
@@ -1975,9 +1994,19 @@ def main():
     
     if args.command == 'prepare':
         cnmf_obj.prepare(args.counts, components=args.components, n_iter=args.n_iter, densify=args.densify,
-                         tpm_fn=args.tpm, seed=args.seed, beta_loss=args.beta_loss, max_NMF_iter=args.max_nmf_iter,
-                         num_highvar_genes=args.numgenes, genes_file=args.genes_file, init=args.init, total_workers=args.total_workers,
-                         use_gpu=args.use_gpu, batch_size=args.batch_size)
+                         tpm_fn=args.tpm, seed=args.seed, beta_loss=args.beta_loss,
+                         num_highvar_genes=args.numgenes, genes_file=args.genes_file, init=args.init,
+                         use_gpu=args.use_gpu, minibatch_size=args.batch_size,
+                         minibatch_shuffle=args.minibatch_shuffle,
+                         algo=args.algo, mode=args.mode, tol=args.tol, n_jobs=args.n_jobs,
+                         alpha_usage=args.alpha_usage, alpha_spectra=args.alpha_spectra,
+                         l1_ratio_usage=args.l1_ratio_usage, l1_ratio_spectra=args.l1_ratio_spectra,
+                         minibatch_usage_tol=args.minibatch_usage_tol, minibatch_spectra_tol=args.minibatch_spectra_tol,
+                         fp_precision=args.fp_precision,
+                         batch_max_epoch=args.batch_max_epoch, batch_hals_tol=args.batch_hals_tol,
+                         batch_hals_max_iter=args.batch_hals_max_iter,
+                         minibatch_max_epoch=args.minibatch_max_epoch, minibatch_max_iter=args.minibatch_max_iter,
+                         sk_cd_refit=args.sk_cd_refit, nmf_seeds=args.nmf_seeds)
 
     elif args.command == 'factorize':
         cnmf_obj.factorize(skip_completed_runs=args.skip_completed_runs)

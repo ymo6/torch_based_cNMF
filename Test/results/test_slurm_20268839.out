@@ -1,0 +1,87 @@
+=== Device info ===
+CUDA available: True
+Device: NVIDIA TITAN V
+===================
+============================= test session starts ==============================
+platform linux -- Python 3.9.23, pytest-8.4.2, pluggy-1.6.0 -- /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/bin/python
+cachedir: .pytest_cache
+rootdir: /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf
+configfile: pyproject.toml
+collecting ... collected 19 items
+
+Test/test_dataloader_pipeline.py::test_factorize_dataloader_mode PASSED  [  5%]
+Test/test_dataloader_pipeline.py::test_full_pipeline_dataloader PASSED   [ 10%]
+Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode PASSED   [ 15%]
+Test/test_dataloader_pipeline.py::test_batch_size_larger_than_num_cells PASSED [ 21%]
+Test/test_fit_H_hals_dl.py::test_basic_shape_and_nonneg PASSED           [ 26%]
+Test/test_fit_H_hals_dl.py::test_reconstruction_improves PASSED          [ 31%]
+Test/test_fit_H_hals_dl.py::test_dl_matches_plain_hals PASSED            [ 36%]
+Test/test_fit_H_hals_dl.py::test_dataframe_inputs PASSED                 [ 42%]
+Test/test_fit_H_hals_dl.py::test_sparse_input PASSED                     [ 47%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[10] PASSED        [ 52%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[30] PASSED        [ 57%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[60] PASSED        [ 63%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[100] PASSED       [ 68%]
+Test/test_fit_H_hals_dl.py::test_regularization PASSED                   [ 73%]
+Test/test_nmf_dataset.py::test_dataset_from_numpy PASSED                 [ 78%]
+Test/test_nmf_dataset.py::test_dataset_from_tensor PASSED                [ 84%]
+Test/test_nmf_dataset.py::test_dataloader_batching PASSED                [ 89%]
+Test/test_nmf_dataset.py::test_dataloader_content_preserved PASSED       [ 94%]
+Test/test_nmf_dataset.py::test_dataloader_gpu_transfer PASSED            [100%]
+
+=============================== warnings summary ===============================
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:64
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:64: PyparsingDeprecationWarning: 'oneOf' deprecated - use 'one_of'
+    prop = Group((name + Suppress("=") + comma_separated(value)) | oneOf(_CONSTANTS))
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+    parse = parser.parseString(pattern)
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89: PyparsingDeprecationWarning: 'resetCache' deprecated - use 'reset_cache'
+    parser.resetCache()
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_mathtext.py:45
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_mathtext.py:45: PyparsingDeprecationWarning: 'enablePackrat' deprecated - use 'enable_packrat'
+    ParserElement.enablePackrat()
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:388
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:388: DeprecationWarning: invalid escape sequence \m
+    """ Implements modularity. This quality function is well-defined only for positive edge weights.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:761
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:761: DeprecationWarning: invalid escape sequence \m
+    """ Implements Reichardt and Bornholdt's Potts model with a configuration null model.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:7
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:7: DeprecationWarning: invalid escape sequence \g
+    """ Class for doing community detection using the Leiden algorithm.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:305
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:305: DeprecationWarning: invalid escape sequence \s
+    """ Optimise the given partitions simultaneously.
+
+Test/test_dataloader_pipeline.py::test_full_pipeline_dataloader
+Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode
+Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode
+Test/test_dataloader_pipeline.py::test_batch_size_larger_than_num_cells
+  /home/users/ymo/.local/lib/python3.9/site-packages/scanpy/preprocessing/_scale.py:318: UserWarning: Received a view of an AnnData. Making a copy.
+    view_to_actual(adata)
+
+Test/test_fit_H_hals_dl.py::test_dl_matches_plain_hals
+  /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/src/torch_cnmf/cnmf.py:513: UserWarning: The use of `x.T` on tensors of dimension other than 2 to reverse their shape is deprecated and it will throw an error in a future release. Consider `x.mT` to transpose batches of matrices or `x.permute(*torch.arange(x.ndim - 1, -1, -1))` to reverse the dimensions of a tensor. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:3725.)
+    WWj = (W_t @ W_t[j].T)  # shape (k,)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================= 19 passed, 23 warnings in 38.61s =======================

@@ -1,0 +1,5 @@
+=== Device info ===
+CUDA available: True
+Device: NVIDIA GeForce RTX 2080 Ti
+===================
+/oak/stanford/groups/engreitz/Users/ymo/miniforge3/bin/python: No module named pytest

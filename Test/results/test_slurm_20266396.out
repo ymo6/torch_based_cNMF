@@ -1,0 +1,711 @@
+=== Device info ===
+CUDA available: True
+Device: NVIDIA L40S
+===================
+============================= test session starts ==============================
+platform linux -- Python 3.9.23, pytest-8.4.2, pluggy-1.6.0 -- /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/bin/python
+cachedir: .pytest_cache
+rootdir: /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf
+configfile: pyproject.toml
+collecting ... collected 19 items
+
+Test/test_dataloader_pipeline.py::test_factorize_dataloader_mode FAILED  [  5%]
+Test/test_dataloader_pipeline.py::test_full_pipeline_dataloader FAILED   [ 10%]
+Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode FAILED   [ 15%]
+Test/test_dataloader_pipeline.py::test_batch_size_larger_than_num_cells FAILED [ 21%]
+Test/test_fit_H_hals_dl.py::test_basic_shape_and_nonneg PASSED           [ 26%]
+Test/test_fit_H_hals_dl.py::test_reconstruction_improves PASSED          [ 31%]
+Test/test_fit_H_hals_dl.py::test_dl_matches_plain_hals PASSED            [ 36%]
+Test/test_fit_H_hals_dl.py::test_dataframe_inputs PASSED                 [ 42%]
+Test/test_fit_H_hals_dl.py::test_sparse_input PASSED                     [ 47%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[10] PASSED        [ 52%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[30] PASSED        [ 57%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[60] PASSED        [ 63%]
+Test/test_fit_H_hals_dl.py::test_different_chunk_sizes[100] PASSED       [ 68%]
+Test/test_fit_H_hals_dl.py::test_regularization PASSED                   [ 73%]
+Test/test_nmf_dataset.py::test_dataset_from_numpy PASSED                 [ 78%]
+Test/test_nmf_dataset.py::test_dataset_from_tensor PASSED                [ 84%]
+Test/test_nmf_dataset.py::test_dataloader_batching PASSED                [ 89%]
+Test/test_nmf_dataset.py::test_dataloader_content_preserved PASSED       [ 94%]
+Test/test_nmf_dataset.py::test_dataloader_gpu_transfer PASSED            [100%]
+
+=================================== FAILURES ===================================
+________________________ test_factorize_dataloader_mode ________________________
+Test/test_dataloader_pipeline.py:87: in test_factorize_dataloader_mode
+    assert len(missing) == 0, f"Missing iteration files: {missing}"
+E   AssertionError: Missing iteration files: ['/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_0.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_1.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_2.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_3.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_4.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_5.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_6.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_7.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_8.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_9.df.npz']
+E   assert 10 == 0
+E    +  where 10 = len(['/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_0.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_1.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_2.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_3.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_4.df.npz', '/oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/Test/results/test_dataloader_pipeline/factorize_dl/dl_test/cnmf_tmp/dl_test.usages.k_3.iter_5.df.npz', ...])
+----------------------------- Captured stdout call -----------------------------
+Number of genes with zero variance: 0
+[Worker 0]. Starting task 0.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=35.136939140845776.
+Pass 2, loss=14.150881121804305.
+Pass 3, loss=13.42105643604016.
+Pass 4, loss=13.241927080772648.
+Pass 5, loss=13.199047077346153.
+Pass 6, loss=13.181477260665343.
+Pass 7, loss=13.171596972154706.
+Pass 8, loss=13.169279845178513.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.163805171817247.
+[Worker 0]. Starting task 1.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=36.32969082646968.
+Pass 2, loss=14.478524978286808.
+Pass 3, loss=13.50292936967753.
+Pass 4, loss=13.300372263352255.
+Pass 5, loss=13.231229333947017.
+Pass 6, loss=13.201821311375943.
+Pass 7, loss=13.185954071117683.
+Pass 8, loss=13.17631338330263.
+Pass 9, loss=13.171402349171101.
+    Converged after 9 pass(es).
+Update H
+Final loss=13.168529008587102.
+[Worker 0]. Starting task 2.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=50.94070398282325.
+Pass 2, loss=39.479389463146624.
+Pass 3, loss=37.44558552085947.
+Pass 4, loss=26.012441152774617.
+Pass 5, loss=14.305589898488982.
+Pass 6, loss=13.381378079139495.
+Pass 7, loss=13.244378966895729.
+Pass 8, loss=13.20420668645981.
+Pass 9, loss=13.185768917781207.
+Pass 10, loss=13.177855811514348.
+    Converged after 10 pass(es).
+Update H
+Final loss=13.173311383722014.
+[Worker 0]. Starting task 3.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=26.720657369784853.
+Pass 2, loss=13.84448185142279.
+Pass 3, loss=13.308253797573332.
+Pass 4, loss=13.22116001966639.
+Pass 5, loss=13.193570877514547.
+Pass 6, loss=13.179416583611545.
+Pass 7, loss=13.17383956286568.
+    Converged after 7 pass(es).
+Update H
+Final loss=13.169622805674807.
+[Worker 0]. Starting task 4.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=25.138109725014626.
+Pass 2, loss=13.650501149797577.
+Pass 3, loss=13.34154054453842.
+Pass 4, loss=13.255204240339905.
+Pass 5, loss=13.21414111437535.
+Pass 6, loss=13.193543120713443.
+Pass 7, loss=13.183917241401549.
+Pass 8, loss=13.177156414487726.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172718315233952.
+[Worker 0]. Starting task 5.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=44.94942633376287.
+Pass 2, loss=24.474252055412745.
+Pass 3, loss=14.150091789675782.
+Pass 4, loss=13.392347832577752.
+Pass 5, loss=13.24978810266885.
+Pass 6, loss=13.207451214300395.
+Pass 7, loss=13.190142470740698.
+Pass 8, loss=13.177318529686247.
+Pass 9, loss=13.171976942072895.
+    Converged after 9 pass(es).
+Update H
+Final loss=13.169168612829171.
+[Worker 0]. Starting task 6.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=24.26746109441097.
+Pass 2, loss=13.79310537404014.
+Pass 3, loss=13.390916712108435.
+Pass 4, loss=13.274575528759856.
+Pass 5, loss=13.219959681647104.
+Pass 6, loss=13.194671850196768.
+Pass 7, loss=13.182963526603189.
+Pass 8, loss=13.177601068550945.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172912918774838.
+[Worker 0]. Starting task 7.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=34.112500930400316.
+Pass 2, loss=13.704389907411967.
+Pass 3, loss=13.35354404912325.
+Pass 4, loss=13.248396866460862.
+Pass 5, loss=13.20554249317545.
+Pass 6, loss=13.186222538837649.
+Pass 7, loss=13.178268021514626.
+    Converged after 7 pass(es).
+Update H
+Final loss=13.174219468103225.
+[Worker 0]. Starting task 8.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=44.09416249364109.
+Pass 2, loss=14.46406891406361.
+Pass 3, loss=13.4471259127183.
+Pass 4, loss=13.269314489876635.
+Pass 5, loss=13.215120290669889.
+Pass 6, loss=13.197807731068444.
+Pass 7, loss=13.183306131121851.
+Pass 8, loss=13.175586109768988.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172366168185198.
+[Worker 0]. Starting task 9.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=26.401379450969273.
+Pass 2, loss=13.80933133196309.
+Pass 3, loss=13.378444905366898.
+Pass 4, loss=13.267502075678188.
+Pass 5, loss=13.220749146996644.
+Pass 6, loss=13.191859098867566.
+Pass 7, loss=13.179949149003289.
+Pass 8, loss=13.173144585908483.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.169048110057158.
+________________________ test_full_pipeline_dataloader _________________________
+Test/test_dataloader_pipeline.py:124: in test_full_pipeline_dataloader
+    cnmf_obj.consensus(k=K, density_threshold=2.0, show_clustering=False)
+src/torch_cnmf/cnmf.py:1610: in consensus
+    l2_spectra = l2_spectra.loc[density_filter, :]
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1184: in __getitem__
+    return self._getitem_tuple(key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1377: in _getitem_tuple
+    return self._getitem_tuple_same_dim(tup)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1020: in _getitem_tuple_same_dim
+    retval = getattr(retval, self.name)._getitem_axis(key, axis=i)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1413: in _getitem_axis
+    return self._getbool_axis(key, axis=axis)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1209: in _getbool_axis
+    key = check_bool_indexer(labels, key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:2662: in check_bool_indexer
+    raise IndexingError(
+E   pandas.errors.IndexingError: Unalignable boolean Series provided as indexer (index of the boolean Series and of the indexed object do not match).
+----------------------------- Captured stdout call -----------------------------
+Number of genes with zero variance: 0
+[Worker 0]. Starting task 0.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=35.136939140845776.
+Pass 2, loss=14.150881121804305.
+Pass 3, loss=13.42105643604016.
+Pass 4, loss=13.241927080772648.
+Pass 5, loss=13.199047077346153.
+Pass 6, loss=13.181477260665343.
+Pass 7, loss=13.171596972154706.
+Pass 8, loss=13.169279845178513.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.163805171817247.
+[Worker 0]. Starting task 1.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=36.32969082646968.
+Pass 2, loss=14.478524978286808.
+Pass 3, loss=13.50292936967753.
+Pass 4, loss=13.300372263352255.
+Pass 5, loss=13.231229333947017.
+Pass 6, loss=13.201821311375943.
+Pass 7, loss=13.185954071117683.
+Pass 8, loss=13.17631338330263.
+Pass 9, loss=13.171402349171101.
+    Converged after 9 pass(es).
+Update H
+Final loss=13.168529008587102.
+[Worker 0]. Starting task 2.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=50.94070398282325.
+Pass 2, loss=39.479389463146624.
+Pass 3, loss=37.44558552085947.
+Pass 4, loss=26.012441152774617.
+Pass 5, loss=14.305589898488982.
+Pass 6, loss=13.381378079139495.
+Pass 7, loss=13.244378966895729.
+Pass 8, loss=13.20420668645981.
+Pass 9, loss=13.185768917781207.
+Pass 10, loss=13.177855811514348.
+    Converged after 10 pass(es).
+Update H
+Final loss=13.173311383722014.
+[Worker 0]. Starting task 3.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=26.720657369784853.
+Pass 2, loss=13.84448185142279.
+Pass 3, loss=13.308253797573332.
+Pass 4, loss=13.22116001966639.
+Pass 5, loss=13.193570877514547.
+Pass 6, loss=13.179416583611545.
+Pass 7, loss=13.17383956286568.
+    Converged after 7 pass(es).
+Update H
+Final loss=13.169622805674807.
+[Worker 0]. Starting task 4.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=25.138109725014626.
+Pass 2, loss=13.650501149797577.
+Pass 3, loss=13.34154054453842.
+Pass 4, loss=13.255204240339905.
+Pass 5, loss=13.21414111437535.
+Pass 6, loss=13.193543120713443.
+Pass 7, loss=13.183917241401549.
+Pass 8, loss=13.177156414487726.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172718315233952.
+[Worker 0]. Starting task 5.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=44.94942633376287.
+Pass 2, loss=24.474252055412745.
+Pass 3, loss=14.150091789675782.
+Pass 4, loss=13.392347832577752.
+Pass 5, loss=13.24978810266885.
+Pass 6, loss=13.207451214300395.
+Pass 7, loss=13.190142470740698.
+Pass 8, loss=13.177318529686247.
+Pass 9, loss=13.171976942072895.
+    Converged after 9 pass(es).
+Update H
+Final loss=13.169168612829171.
+[Worker 0]. Starting task 6.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=24.26746109441097.
+Pass 2, loss=13.79310537404014.
+Pass 3, loss=13.390916712108435.
+Pass 4, loss=13.274575528759856.
+Pass 5, loss=13.219959681647104.
+Pass 6, loss=13.194671850196768.
+Pass 7, loss=13.182963526603189.
+Pass 8, loss=13.177601068550945.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172912918774838.
+[Worker 0]. Starting task 7.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=34.112500930400316.
+Pass 2, loss=13.704389907411967.
+Pass 3, loss=13.35354404912325.
+Pass 4, loss=13.248396866460862.
+Pass 5, loss=13.20554249317545.
+Pass 6, loss=13.186222538837649.
+Pass 7, loss=13.178268021514626.
+    Converged after 7 pass(es).
+Update H
+Final loss=13.174219468103225.
+[Worker 0]. Starting task 8.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=44.09416249364109.
+Pass 2, loss=14.46406891406361.
+Pass 3, loss=13.4471259127183.
+Pass 4, loss=13.269314489876635.
+Pass 5, loss=13.215120290669889.
+Pass 6, loss=13.197807731068444.
+Pass 7, loss=13.183306131121851.
+Pass 8, loss=13.175586109768988.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.172366168185198.
+[Worker 0]. Starting task 9.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=26.401379450969273.
+Pass 2, loss=13.80933133196309.
+Pass 3, loss=13.378444905366898.
+Pass 4, loss=13.267502075678188.
+Pass 5, loss=13.220749146996644.
+Pass 6, loss=13.191859098867566.
+Pass 7, loss=13.179949149003289.
+Pass 8, loss=13.173144585908483.
+    Converged after 8 pass(es).
+Update H
+Final loss=13.169048110057158.
+Combining factorizations for k=3.
+________________________ test_dataloader_vs_batch_mode _________________________
+Test/test_dataloader_pipeline.py:173: in test_dataloader_vs_batch_mode
+    cnmf_obj.consensus(k=K, density_threshold=2.0, show_clustering=False)
+src/torch_cnmf/cnmf.py:1610: in consensus
+    l2_spectra = l2_spectra.loc[density_filter, :]
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1184: in __getitem__
+    return self._getitem_tuple(key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1377: in _getitem_tuple
+    return self._getitem_tuple_same_dim(tup)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1020: in _getitem_tuple_same_dim
+    retval = getattr(retval, self.name)._getitem_axis(key, axis=i)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1413: in _getitem_axis
+    return self._getbool_axis(key, axis=axis)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1209: in _getbool_axis
+    key = check_bool_indexer(labels, key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:2662: in check_bool_indexer
+    raise IndexingError(
+E   pandas.errors.IndexingError: Unalignable boolean Series provided as indexer (index of the boolean Series and of the indexed object do not match).
+----------------------------- Captured stdout call -----------------------------
+Number of genes with zero variance: 0
+[Worker 0]. Starting task 0.
+Use GPU mode.
+ niter=10, loss=13.184500547517908.
+ niter=20, loss=13.159849566959343.
+ niter=30, loss=13.15587885462237.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 1.
+Use GPU mode.
+ niter=10, loss=13.189388194207494.
+ niter=20, loss=13.160962635764909.
+ niter=30, loss=13.156212885933398.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 2.
+Use GPU mode.
+ niter=10, loss=13.219931980252394.
+ niter=20, loss=13.158476652428273.
+ niter=30, loss=13.155062297933066.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 3.
+Use GPU mode.
+ niter=10, loss=13.179425845802237.
+ niter=20, loss=13.160220600354691.
+ niter=30, loss=13.155953084535533.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 4.
+Use GPU mode.
+ niter=10, loss=13.185500440825141.
+ niter=20, loss=13.160072188251856.
+ niter=30, loss=13.155953084535533.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 5.
+Use GPU mode.
+ niter=10, loss=13.191905366075819.
+ niter=20, loss=13.161704629340381.
+ niter=30, loss=13.156546908763712.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 6.
+Use GPU mode.
+ niter=10, loss=13.188351572031282.
+ niter=20, loss=13.160480317507412.
+ niter=30, loss=13.155990199335054.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 7.
+Use GPU mode.
+ niter=10, loss=13.186537287134936.
+ niter=20, loss=13.159218786178.
+ niter=30, loss=13.155693278007055.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 8.
+Use GPU mode.
+ niter=10, loss=13.183056123297057.
+ niter=20, loss=13.160740029534812.
+ niter=30, loss=13.15625.
+    Converged after 30 iteration(s).
+[Worker 0]. Starting task 9.
+Use GPU mode.
+ niter=10, loss=13.188832871031462.
+ niter=20, loss=13.160814232029871.
+ niter=30, loss=13.156138657486094.
+    Converged after 30 iteration(s).
+Combining factorizations for k=3.
+____________________ test_batch_size_larger_than_num_cells _____________________
+Test/test_dataloader_pipeline.py:215: in test_batch_size_larger_than_num_cells
+    cnmf_obj.consensus(k=K, density_threshold=2.0, show_clustering=False)
+src/torch_cnmf/cnmf.py:1610: in consensus
+    l2_spectra = l2_spectra.loc[density_filter, :]
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1184: in __getitem__
+    return self._getitem_tuple(key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1377: in _getitem_tuple
+    return self._getitem_tuple_same_dim(tup)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1020: in _getitem_tuple_same_dim
+    retval = getattr(retval, self.name)._getitem_axis(key, axis=i)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1413: in _getitem_axis
+    return self._getbool_axis(key, axis=axis)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:1209: in _getbool_axis
+    key = check_bool_indexer(labels, key)
+/home/users/ymo/.local/lib/python3.9/site-packages/pandas/core/indexing.py:2662: in check_bool_indexer
+    raise IndexingError(
+E   pandas.errors.IndexingError: Unalignable boolean Series provided as indexer (index of the boolean Series and of the indexed object do not match).
+----------------------------- Captured stdout call -----------------------------
+Number of genes with zero variance: 0
+[Worker 0]. Starting task 0.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=47.90707048384142.
+Pass 2, loss=14.821002306693027.
+Pass 3, loss=13.7600105604974.
+Pass 4, loss=13.441460172261792.
+Pass 5, loss=13.320530148515111.
+Pass 6, loss=13.260388026939482.
+Pass 7, loss=13.226061807563882.
+Pass 8, loss=13.205815184512465.
+Pass 9, loss=13.19320078203163.
+Pass 10, loss=13.184500547517908.
+Pass 11, loss=13.178573697009096.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.176165152463748.
+[Worker 0]. Starting task 1.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=46.84767953831865.
+Pass 2, loss=15.028228646450652.
+Pass 3, loss=13.83849364092783.
+Pass 4, loss=13.475273942020623.
+Pass 5, loss=13.34005364494461.
+Pass 6, loss=13.27418929963333.
+Pass 7, loss=13.236431732155006.
+Pass 8, loss=13.21379930933946.
+Pass 9, loss=13.199269037526282.
+Pass 10, loss=13.189388194207494.
+Pass 11, loss=13.182204209179131.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.179611088249152.
+[Worker 0]. Starting task 2.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=51.36490548638243.
+Pass 2, loss=38.44909631984216.
+Pass 3, loss=37.77817398561635.
+Pass 4, loss=36.987988971083574.
+Pass 5, loss=29.70073718045564.
+Pass 6, loss=16.05945982902289.
+Pass 7, loss=13.748046736264028.
+Pass 8, loss=13.377117238964455.
+Pass 9, loss=13.265174094221305.
+Pass 10, loss=13.219895044969155.
+Pass 11, loss=13.196087251530281.
+Pass 12, loss=13.182759811587253.
+Pass 13, loss=13.175349853039956.
+    Converged after 13 pass(es).
+Update H
+Final loss=13.172458839373915.
+[Worker 0]. Starting task 3.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=42.76249360567038.
+Pass 2, loss=14.992836831300473.
+Pass 3, loss=13.662577195573315.
+Pass 4, loss=13.366892986965969.
+Pass 5, loss=13.269112100570256.
+Pass 6, loss=13.227427707230156.
+Pass 7, loss=13.206480712608489.
+Pass 8, loss=13.193607886491852.
+Pass 9, loss=13.185389345313244.
+    Converged after 9 pass(es).
+Update H
+Final loss=13.182241250068214.
+[Worker 0]. Starting task 4.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=47.58161676431613.
+Pass 2, loss=14.870108176724875.
+Pass 3, loss=13.749964488590507.
+Pass 4, loss=13.435683016691039.
+Pass 5, loss=13.317084011242851.
+Pass 6, loss=13.25913600126343.
+Pass 7, loss=13.226135643584637.
+Pass 8, loss=13.206665575572057.
+Pass 9, loss=13.194163008694412.
+Pass 10, loss=13.185500440825141.
+    Converged after 10 pass(es).
+Update H
+Final loss=13.182315331534138.
+[Worker 0]. Starting task 5.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=48.98687443782773.
+Pass 2, loss=35.546157272973964.
+Pass 3, loss=18.7670755580085.
+Pass 4, loss=14.28125.
+Pass 5, loss=13.547478720688215.
+Pass 6, loss=13.340419666374817.
+Pass 7, loss=13.261382198417328.
+Pass 8, loss=13.225692621276966.
+Pass 9, loss=13.204853806934025.
+Pass 10, loss=13.191831338464723.
+Pass 11, loss=13.184167232897192.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.181241109527585.
+[Worker 0]. Starting task 6.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=35.04922598556921.
+Pass 2, loss=14.964117237161036.
+Pass 3, loss=13.815963932169192.
+Pass 4, loss=13.469185027777293.
+Pass 5, loss=13.337088501149717.
+Pass 6, loss=13.272313169715368.
+Pass 7, loss=13.235288117849947.
+Pass 8, loss=13.212912422607667.
+Pass 9, loss=13.198529155743074.
+Pass 10, loss=13.188462642590302.
+Pass 11, loss=13.181500412509951.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.178758951433933.
+[Worker 0]. Starting task 7.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=53.18411692384062.
+Pass 2, loss=25.534768729371724.
+Pass 3, loss=14.301544660892404.
+Pass 4, loss=13.584192042131177.
+Pass 5, loss=13.371385317628835.
+Pass 6, loss=13.28411733753884.
+Pass 7, loss=13.238903077200165.
+Pass 8, loss=13.212727647045481.
+Pass 9, loss=13.196901269805727.
+Pass 10, loss=13.186574315852468.
+Pass 11, loss=13.179685184498908.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.17694334576498.
+[Worker 0]. Starting task 8.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=51.25668306273583.
+Pass 2, loss=18.431195956177124.
+Pass 3, loss=13.955495669269508.
+Pass 4, loss=13.461787643641538.
+Pass 5, loss=13.31305016468803.
+Pass 6, loss=13.254163555747303.
+Pass 7, loss=13.221741682736052.
+Pass 8, loss=13.202524024784049.
+Pass 9, loss=13.191054023466055.
+Pass 10, loss=13.183093161792494.
+    Converged after 10 pass(es).
+Update H
+Final loss=13.180166799968807.
+[Worker 0]. Starting task 9.
+Use GPU mode.
+use Dataloader for minibatch NMF
+Use Dataloader Online HALS
+Pass 1, loss=37.529506620624524.
+Pass 2, loss=15.027773766429943.
+Pass 3, loss=13.835317691509653.
+Pass 4, loss=13.474114360970075.
+Pass 5, loss=13.33976082056946.
+Pass 6, loss=13.273931807305626.
+Pass 7, loss=13.235878382733048.
+Pass 8, loss=13.213245012108116.
+Pass 9, loss=13.198862107678071.
+Pass 10, loss=13.188832871031462.
+Pass 11, loss=13.1819449200412.
+    Converged after 11 pass(es).
+Update H
+Final loss=13.179166502002317.
+Combining factorizations for k=3.
+=============================== warnings summary ===============================
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:64
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:64: PyparsingDeprecationWarning: 'oneOf' deprecated - use 'one_of'
+    prop = Group((name + Suppress("=") + comma_separated(value)) | oneOf(_CONSTANTS))
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:85: PyparsingDeprecationWarning: 'parseString' deprecated - use 'parse_string'
+    parse = parser.parseString(pattern)
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_fontconfig_pattern.py:89: PyparsingDeprecationWarning: 'resetCache' deprecated - use 'reset_cache'
+    parser.resetCache()
+
+../../miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_mathtext.py:45
+  /oak/stanford/groups/engreitz/Users/ymo/miniforge3/envs/torch-nmf-dl/lib/python3.9/site-packages/matplotlib/_mathtext.py:45: PyparsingDeprecationWarning: 'enablePackrat' deprecated - use 'enable_packrat'
+    ParserElement.enablePackrat()
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:388
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:388: DeprecationWarning: invalid escape sequence \m
+    """ Implements modularity. This quality function is well-defined only for positive edge weights.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:761
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/VertexPartition.py:761: DeprecationWarning: invalid escape sequence \m
+    """ Implements Reichardt and Bornholdt's Potts model with a configuration null model.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:7
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:7: DeprecationWarning: invalid escape sequence \g
+    """ Class for doing community detection using the Leiden algorithm.
+
+../../../../../../../../home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:305
+  /home/users/ymo/.local/lib/python3.9/site-packages/leidenalg/Optimiser.py:305: DeprecationWarning: invalid escape sequence \s
+    """ Optimise the given partitions simultaneously.
+
+Test/test_dataloader_pipeline.py::test_factorize_dataloader_mode
+Test/test_dataloader_pipeline.py::test_batch_size_larger_than_num_cells
+  /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/src/torch_cnmf/cnmf.py:1221: UserWarning: 2 runs already appear completed. If this is unexpected, consider
+              re-initializing the cnmf object with a different run name or output directory
+    warnings.warn(message, UserWarning)
+
+Test/test_dataloader_pipeline.py::test_full_pipeline_dataloader
+Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode
+  /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/src/torch_cnmf/cnmf.py:1221: UserWarning: 3 runs already appear completed. If this is unexpected, consider
+              re-initializing the cnmf object with a different run name or output directory
+    warnings.warn(message, UserWarning)
+
+Test/test_fit_H_hals_dl.py::test_dl_matches_plain_hals
+  /oak/stanford/groups/engreitz/Users/ymo/Tools/torch-cnmf/src/torch_cnmf/cnmf.py:513: UserWarning: The use of `x.T` on tensors of dimension other than 2 to reverse their shape is deprecated and it will throw an error in a future release. Consider `x.mT` to transpose batches of matrices or `x.permute(*torch.arange(x.ndim - 1, -1, -1))` to reverse the dimensions of a tensor. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:3725.)
+    WWj = (W_t @ W_t[j].T)  # shape (k,)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED Test/test_dataloader_pipeline.py::test_factorize_dataloader_mode - Ass...
+FAILED Test/test_dataloader_pipeline.py::test_full_pipeline_dataloader - pand...
+FAILED Test/test_dataloader_pipeline.py::test_dataloader_vs_batch_mode - pand...
+FAILED Test/test_dataloader_pipeline.py::test_batch_size_larger_than_num_cells
+================== 4 failed, 15 passed, 23 warnings in 26.50s ==================
