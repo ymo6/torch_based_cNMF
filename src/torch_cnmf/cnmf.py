@@ -1932,7 +1932,7 @@ def main():
     parser.add_argument('--minibatch-max-epoch', type=int, help='[prepare] Max minibatch passes over all data (default 20)', default=20)
     parser.add_argument('--minibatch-max-iter', type=int, help='[prepare] Max iterations for H/W update in minibatch (default 200)', default=200)
     parser.add_argument('--sk-cd-refit', action='store_true', help='[prepare] Reuse sklearn solver for refit step (default False)', default=False)
-    parser.add_argument('--nmf-seeds', type=int, nargs='+', help='[prepare] Explicit list of NMF seeds to use', default=None)
+    parser.add_argument('--nmf-seeds-file', type=str, help='[prepare] Path to a text file with NMF seeds (one integer per line)', default=None)
     parser.add_argument('--skip-completed-runs', action='store_true', help='[factorize] Skip previously completed runs. Must re-run prepare first to update completed runs', default=False)
     parser.add_argument('--local-density-threshold', type=float, help='[consensus] Threshold for the local density filtering. This string must convert to a float >0 and <=2', default=0.5)
     parser.add_argument('--local-neighborhood-size', type=float, help='[consensus] Fraction of the number of replicates to use as nearest neighbors for local density filtering', default=0.30)
@@ -1942,8 +1942,13 @@ def main():
     
     args = parser.parse_args()
 
+    # Load NMF seeds from file if provided
+    nmf_seeds = None
+    if args.nmf_seeds_file is not None:
+        nmf_seeds = np.load(args.nmf_seeds_file)
+
     cnmf_obj = cNMF(output_dir=args.output_dir, name=args.name)
-    
+
     if args.command == 'prepare':
         cnmf_obj.prepare(args.counts, components=args.components, n_iter=args.n_iter, densify=args.densify,
                          tpm_fn=args.tpm, seed=args.seed, beta_loss=args.beta_loss,
@@ -1958,7 +1963,7 @@ def main():
                          batch_max_epoch=args.batch_max_epoch, batch_hals_tol=args.batch_hals_tol,
                          batch_hals_max_iter=args.batch_hals_max_iter,
                          minibatch_max_epoch=args.minibatch_max_epoch, minibatch_max_iter=args.minibatch_max_iter,
-                         sk_cd_refit=args.sk_cd_refit, nmf_seeds=args.nmf_seeds)
+                         sk_cd_refit=args.sk_cd_refit, nmf_seeds=nmf_seeds)
 
     elif args.command == 'factorize':
         cnmf_obj.factorize(skip_completed_runs=args.skip_completed_runs)
