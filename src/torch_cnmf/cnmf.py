@@ -850,8 +850,7 @@ class cNMF():
             Match the number of NMF replicates, that's the seed to randomly intialize H and W matrix for NMF
 
         """
-        
-        
+
         if counts_fn.endswith('.h5ad'):
             input_counts = sc.read(counts_fn)
         elif counts_fn.endswith('.mtx') or counts_fn.endswith('.mtx.gz'):
@@ -1538,7 +1537,6 @@ class cNMF():
         if skip_density_and_return_after_stats:
             density_threshold_str = '2'
         density_threshold_repl = density_threshold_str.replace('.', '_')
-        n_neighbors = int(local_neighborhood_size * merged_spectra.shape[0]/k)
 
         # Drop all-zero spectra rows (dead components from minibatch/high-iter runs)
         row_norms = np.sqrt((merged_spectra**2).sum(axis=1))
@@ -1547,6 +1545,12 @@ class cNMF():
             print(f"Dropping {zero_mask.sum()}/{len(merged_spectra)} all-zero spectra rows.")
             merged_spectra = merged_spectra.loc[~zero_mask]
             row_norms = row_norms[~zero_mask]
+            # Invalidate cached local density since it was computed with the dropped rows
+            cache_file = self.paths['local_density_cache'] % k
+            if os.path.isfile(cache_file):
+                os.remove(cache_file)
+
+        n_neighbors = int(local_neighborhood_size * merged_spectra.shape[0]/k)
 
         # Rescale topics such to length of 1.
         l2_spectra = (merged_spectra.T/row_norms).T
@@ -1554,9 +1558,13 @@ class cNMF():
         if not skip_density_and_return_after_stats:
             # Compute the local density matrix (if not previously cached)
             topics_dist = None
+            local_density = None
             if os.path.isfile(self.paths['local_density_cache'] % k):
                 local_density = load_df_from_npz(self.paths['local_density_cache'] % k)
-            else:
+                if len(local_density) != len(l2_spectra):
+                    local_density = None  # stale cache, recompute
+
+            if local_density is None:
                 #   first find the full distance matrix
                 topics_dist = euclidean_distances(l2_spectra.values)
                 #   partition based on the first n neighbors
