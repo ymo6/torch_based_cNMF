@@ -1925,9 +1925,19 @@ class cNMF():
             plt.tight_layout()
 
             dt_str = str(dt).replace('.', '_')
-            fig.savefig(self.paths['density_filtering_plot'] % dt_str, dpi=250)
+            png_path = self.paths['density_filtering_plot'] % dt_str
+            fig.savefig(png_path, dpi=250)
             if close_fig:
                 plt.close(fig)
+            else:
+                # Render the saved PNG inline via IPython.Image, which works
+                # regardless of matplotlib backend state.
+                try:
+                    from IPython.display import Image, display
+                    plt.close(fig)
+                    display(Image(filename=png_path))
+                except ImportError:
+                    plt.show()
 
         return stats
 
