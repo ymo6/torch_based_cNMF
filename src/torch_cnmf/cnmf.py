@@ -715,6 +715,8 @@ class cNMF():
 
                 'k_selection_plot' :  os.path.join(self.output_dir, self.name, self.name+'.k_selection.png'),
                 'k_selection_stats' :  os.path.join(self.output_dir, self.name, self.name+'.k_selection_stats.df.npz'),
+
+                'density_filtering_plot':  os.path.join(self.output_dir, self.name, self.name+'.density_filtering.dt_%s.png'),
             }
 
     def prepare(self, counts_fn,components, n_iter = 100, densify=False, tpm_fn=None,  num_highvar_genes=2000, genes_file=None,
@@ -1833,7 +1835,102 @@ class cNMF():
         fig.savefig(self.paths['k_selection_plot'], dpi=250)
         if close_fig:
             plt.close(fig)
-                    
+
+    def density_filtering_plot(self, density_thresholds=None,
+                               components=None, close_fig=False):
+        """
+        Diagnostic plot summarizing density-filtering across k, one PNG per threshold.
+
+        Reads cached ``local_density_cache.k_<k>.merged.df.npz`` files (no
+        recomputation, no consensus calls). If ``density_thresholds`` is None,
+        auto-detects thresholds from consensus output filenames
+        (``*.spectra.k_*.dt_*.consensus.txt``) already on disk.
+
+        Parameters
+        ----------
+        density_thresholds : iterable of float or None
+            Thresholds to summarize. None = auto-detect from existing consensus runs.
+        components : list[int] or None
+            k values to include. None = autodetect from cache files.
+        close_fig : bool
+            Close figures after saving.
+
+        Returns
+        -------
+        stats : pandas.DataFrame
+            Columns: k, density_threshold, n_total, n_survived, pct_survived
+        """
+        import glob, re
+
+        # 1. Auto-detect k values from local_density_cache files
+        if components is None:
+            cache_glob = self.paths['local_density_cache'].replace('%d', '*')
+            cache_files = glob.glob(cache_glob)
+            components = sorted({int(re.search(r'\.k_(\d+)\.', f).group(1))
+                                 for f in cache_files})
+            if not components:
+                raise FileNotFoundError(
+                    f"No local_density_cache files found at {cache_glob}. "
+                    "Run consensus() first.")
+
+        # 2. Auto-detect density thresholds from consensus output files
+        if density_thresholds is None:
+            consensus_glob = (self.paths['consensus_spectra__txt']
+                              .replace('%d', '*').replace('%s', '*'))
+            files = glob.glob(consensus_glob)
+            dt_strs = {re.search(r'\.dt_([\d_]+)\.consensus', f).group(1)
+                       for f in files}
+            density_thresholds = sorted({float(s.replace('_', '.')) for s in dt_strs})
+            if not density_thresholds:
+                raise ValueError(
+                    "No consensus runs found; pass density_thresholds=[...] explicitly.")
+
+        # 3. Build the per-(k, dt) stats table
+        rows = []
+        for k in components:
+            ld = load_df_from_npz(self.paths['local_density_cache'] % k)
+            ld_arr = ld.iloc[:, 0].values
+            n_total = len(ld_arr)
+            for dt in density_thresholds:
+                n_survived = int((ld_arr < dt).sum())
+                rows.append(dict(
+                    k=k, density_threshold=dt, n_total=n_total,
+                    n_survived=n_survived,
+                    pct_survived=100.0 * n_survived / n_total))
+        stats = pd.DataFrame(rows)
+
+        # 4. One PNG per density threshold (Style C: stacked panels)
+        for dt in density_thresholds:
+            sub = stats[stats.density_threshold == dt].sort_values('k').reset_index(drop=True)
+            fig, (ax_top, ax_bot) = plt.subplots(
+                2, 1, figsize=(6, 6), sharex=True,
+                gridspec_kw={'height_ratios': [3, 1]})
+
+            labels = sub.k.astype(str)
+            ax_top.bar(labels, sub.n_survived, color='#4C9F70', label='survived')
+            ax_top.bar(labels, sub.n_total - sub.n_survived,
+                       bottom=sub.n_survived, color='lightgray', label='filtered out')
+            ax_top.set_ylabel('Number of program replicates')
+            ax_top.set_title(f'Density filtering @ threshold = {dt}')
+            ax_top.legend(loc='upper left', frameon=False)
+            for x, (s, t) in enumerate(zip(sub.n_survived, sub.n_total)):
+                ax_top.text(x, t + 0.02 * sub.n_total.max(),
+                            f'{s}/{t}', ha='center', va='bottom', fontsize=8)
+
+            ax_bot.plot(labels, sub.pct_survived, 'o-', color='#4C9F70')
+            ax_bot.set_ylim(0, 105)
+            ax_bot.set_ylabel('% survived')
+            ax_bot.set_xlabel('Number of components (k)')
+            ax_bot.grid(True, alpha=0.3)
+            plt.tight_layout()
+
+            dt_str = str(dt).replace('.', '_')
+            fig.savefig(self.paths['density_filtering_plot'] % dt_str, dpi=250)
+            if close_fig:
+                plt.close(fig)
+
+        return stats
+
     def load_results(self, K, density_threshold, n_top_genes=100, norm_usage = True):
         """
         Loads normalized usages and gene_spectra_scores for a given choice of K and 
@@ -1907,7 +2004,7 @@ def main():
     import sys, argparse
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('command', type=str, choices=['prepare', 'factorize', 'combine', 'consensus', 'k_selection_plot'])
+    parser.add_argument('command', type=str, choices=['prepare', 'factorize', 'combine', 'consensus', 'k_selection_plot', 'density_filtering_plot'])
     parser.add_argument('--name', type=str, help='[all] Name for analysis. All output will be placed in [output-dir]/[name]/...', nargs='?', default='cNMF')
     parser.add_argument('--output-dir', type=str, help='[all] Output directory. All output will be placed in [output-dir]/[name]/...', nargs='?', default='.')
     parser.add_argument('-c', '--counts', type=str, help='[prepare] Input (cell x gene) counts matrix as .h5ad, .mtx, df.npz, or tab delimited text file')
@@ -1996,6 +2093,9 @@ def main():
 
     elif args.command == 'k_selection_plot':
         cnmf_obj.k_selection_plot(close_fig=True)
+
+    elif args.command == 'density_filtering_plot':
+        cnmf_obj.density_filtering_plot(close_fig=True)
 
 if __name__=="__main__":
     main()
