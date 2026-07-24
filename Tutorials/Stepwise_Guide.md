@@ -62,8 +62,8 @@ Minibatch mode parameters
   - --shuffle - Enable shuffling of samples across mini-batches each epoch. Default: `False`
   - --minibatch-max-epoch - Maximum passes over all data. Default: `20`
   - --minibatch-max-iter - Maximum iterations for H/W update per mini-batch. Default: `200`
-  - --minibatch-usage-tol - Convergence tolerance for usage updates in minibatch mode. Default: `0.05`
-  - --minibatch-spectra-tol - Convergence tolerance for spectra updates in minibatch mode. Default: `0.05`
+  - --minibatch-usage-tol - Convergence tolerance for usage updates in minibatch mode. Default: `1e-7`
+  - --minibatch-spectra-tol - Convergence tolerance for spectra updates in minibatch mode. Default: `1e-7`
 
 Refit parameters
   - --sk-cd-refit - Use the sklearn coordinate descent solver for the refit step. Default: `False`
