@@ -274,7 +274,8 @@ def fit_H_online_mu(
     l1_reg_H=0.0,
     l2_reg_H=0.0,
     epsilon=1e-16,
-    device="cpu"
+    device="cpu",
+    dtype=torch.float32
     ):
 
     """
@@ -302,6 +303,9 @@ def fit_H_online_mu(
         Small constant to avoid division by zero.
     device : str
         Torch device, e.g. "cpu" or "cuda".
+    dtype : torch.dtype
+        Tensor precision (default torch.float32). Use torch.float64 for higher
+        precision (e.g. to converge below the float32 reconstruction-loss floor).
 
     Returns
     -------
@@ -337,7 +341,6 @@ def fit_H_online_mu(
         X = X.toarray()
 
     # Move data to torch
-    dtype = torch.float32
     dev = torch.device(device)
     X_t = torch.from_numpy(X).to(dtype=dtype, device=dev)
     W_t = torch.from_numpy(W).to(dtype=dtype, device=dev)
@@ -716,7 +719,7 @@ class cNMF():
                 'k_selection_plot' :  os.path.join(self.output_dir, self.name, self.name+'.k_selection.png'),
                 'k_selection_stats' :  os.path.join(self.output_dir, self.name, self.name+'.k_selection_stats.df.npz'),
 
-                'density_filtering_plot':  os.path.join(self.output_dir, self.name, self.name+'.density_filtering.dt_%s.png'),
+                'density_filtering_plot':  os.path.join(self.output_dir, self.name, self.name+'.density_filtering.k_%d.png'),
             }
 
     def prepare(self, counts_fn,components, n_iter = 100, densify=False, tpm_fn=None,  num_highvar_genes=2000, genes_file=None,
@@ -725,7 +728,7 @@ class cNMF():
                         seed=42, use_gpu: bool = False,
                         alpha_usage=0.0, alpha_spectra=0.0,
                         l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
-                        minibatch_usage_tol: float = 0.05, minibatch_spectra_tol: float = 0.05,
+                        minibatch_usage_tol: float = 1e-7, minibatch_spectra_tol: float = 1e-7,
                         fp_precision: Union[str, torch.dtype] = "float",
                         batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
                         minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
@@ -836,10 +839,10 @@ class cNMF():
         minibatch_max_iter: ``int``, optional, default: ``200``
             The maximum number of iterations for updating H or W in minibatch learning.
 
-        minibatch_spectra_tol: ``float``, optional, default: 0.05
+        minibatch_spectra_tol: ``float``, optional, default: 1e-7
             The tolerance for updating spectra (W) in each mini-batch.
 
-        minibatch_usage_tol: ``float``, optional, default: 0.05
+        minibatch_usage_tol: ``float``, optional, default: 1e-7
             The tolerance for updating usages (H) in each mini-batch.
 
 
@@ -874,17 +877,24 @@ class cNMF():
                                        obs=pd.DataFrame(index=input_counts.index),
                                        var=pd.DataFrame(index=input_counts.columns))
 
+        #Alexandra's edit to add new methods:
 
-        #Alexandra's edit to add new methods: 
-
+        ## Gene names must be unique: downstream steps index genes by name
+        ## (counts[:, high_variance_genes_filter] here, tpm[:, hvgs] and
+        ## tpm_stats.loc[hvgs] in consensus) and break on repeated var_names
+        input_counts.var_names_make_unique()
 
         self.sk_cd_refit = sk_cd_refit # store parameter for later use in refit
         self.seed = seed # seed to generate all NMF seeds
 
-        if nmf_seeds is not None: 
-
-            if len(nmf_seeds) != n_iter:
-                raise ValueError("len of nmf_seeds must equal to number of n_iter ")
+        if nmf_seeds is not None:
+            n_runs = len(sorted(set(components))) * n_iter   # one seed per (K, iter)
+            if len(nmf_seeds) != n_runs:
+                warnings.warn(
+                    "len(nmf_seeds)=%d does not match n_runs = n_unique_K * n_iter = %d; "
+                    "seeds may be misaligned or indexing may fail." % (len(nmf_seeds), n_runs),
+                    UserWarning,
+                )
 
         self.nmf_seeds = nmf_seeds # all NMF seeds can be given as well
 
@@ -1075,7 +1085,7 @@ class cNMF():
                             tol: float = 1e-4, n_jobs=-1,seed=None,use_gpu: bool = False,
                             alpha_usage=0.0, alpha_spectra=0.0,
                             l1_ratio_usage: float = 0.0, l1_ratio_spectra: float = 0.0,
-                            minibatch_usage_tol: float = 0.05, minibatch_spectra_tol: float = 0.05,
+                            minibatch_usage_tol: float = 1e-7, minibatch_spectra_tol: float = 1e-7,
                             fp_precision: Union[str, torch.dtype] = "float",
                             batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
                             minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
@@ -1167,10 +1177,10 @@ class cNMF():
         minibatch_max_iter: ``int``, optional, default: ``200``
             The maximum number of iterations for updating H or W in minibatch learning.
 
-        minibatch_spectra_tol: ``float``, optional, default: 0.05
+        minibatch_spectra_tol: ``float``, optional, default: 1e-7
             The tolerance for updating spectra (W) in each mini-batch.
 
-        minibatch_usage_tol: ``float``, optional, default: 0.05
+        minibatch_usage_tol: ``float``, optional, default: 1e-7
             The tolerance for updating usages (H) in each mini-batch.
         """
 
@@ -1837,23 +1847,25 @@ class cNMF():
             plt.close(fig)
 
     def density_filtering_plot(self, density_thresholds=None,
-                               components=None, close_fig=False):
+                               k=None, close_fig=False):
         """
-        Diagnostic plot summarizing density-filtering across k, one PNG per threshold.
+        Diagnostic plot of program-replicate survival vs. density threshold for a
+        single k, one PNG.
 
-        Reads cached ``local_density_cache.k_<k>.merged.df.npz`` files (no
-        recomputation, no consensus calls). If ``density_thresholds`` is None,
-        auto-detects thresholds from consensus output filenames
-        (``*.spectra.k_*.dt_*.consensus.txt``) already on disk.
+        Reads the cached ``local_density_cache.k_<k>.merged.df.npz`` file (no
+        recomputation, no consensus calls) and sweeps the local-density threshold,
+        reporting how many program replicates survive filtering at each value.
 
         Parameters
         ----------
         density_thresholds : iterable of float or None
-            Thresholds to summarize. None = auto-detect from existing consensus runs.
-        components : list[int] or None
-            k values to include. None = autodetect from cache files.
+            Thresholds to sweep. None = default sweep
+            ``[0.1, 0.2, 0.4, 0.6, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]``.
+        k : int or None
+            Which k (number of components) to summarize. None = autodetect from
+            cache files; if more than one is present you must specify k.
         close_fig : bool
-            Close figures after saving.
+            Close the figure after saving.
 
         Returns
         -------
@@ -1862,82 +1874,75 @@ class cNMF():
         """
         import glob, re
 
-        # 1. Auto-detect k values from local_density_cache files
-        if components is None:
+        # 1. Default density-threshold sweep
+        if density_thresholds is None:
+            density_thresholds = [0.1, 0.2, 0.4, 0.6, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0]
+        density_thresholds = sorted(float(dt) for dt in density_thresholds)
+
+        # 2. Resolve k from cache files if not given
+        if k is None:
             cache_glob = self.paths['local_density_cache'].replace('%d', '*')
             cache_files = glob.glob(cache_glob)
-            components = sorted({int(re.search(r'\.k_(\d+)\.', f).group(1))
-                                 for f in cache_files})
-            if not components:
+            ks = sorted({int(re.search(r'\.k_(\d+)\.', f).group(1))
+                         for f in cache_files})
+            if not ks:
                 raise FileNotFoundError(
                     f"No local_density_cache files found at {cache_glob}. "
                     "Run consensus() first.")
-
-        # 2. Auto-detect density thresholds from consensus output files
-        if density_thresholds is None:
-            consensus_glob = (self.paths['consensus_spectra__txt']
-                              .replace('%d', '*').replace('%s', '*'))
-            files = glob.glob(consensus_glob)
-            dt_strs = {re.search(r'\.dt_([\d_]+)\.consensus', f).group(1)
-                       for f in files}
-            density_thresholds = sorted({float(s.replace('_', '.')) for s in dt_strs})
-            if not density_thresholds:
+            if len(ks) > 1:
                 raise ValueError(
-                    "No consensus runs found; pass density_thresholds=[...] explicitly.")
+                    f"Multiple k values cached ({ks}); pass k=<int> to pick one.")
+            k = ks[0]
 
-        # 3. Build the per-(k, dt) stats table
+        # 3. Build the per-threshold stats table for this k
+        ld = load_df_from_npz(self.paths['local_density_cache'] % k)
+        ld_arr = ld.iloc[:, 0].values
+        n_total = len(ld_arr)
         rows = []
-        for k in components:
-            ld = load_df_from_npz(self.paths['local_density_cache'] % k)
-            ld_arr = ld.iloc[:, 0].values
-            n_total = len(ld_arr)
-            for dt in density_thresholds:
-                n_survived = int((ld_arr < dt).sum())
-                rows.append(dict(
-                    k=k, density_threshold=dt, n_total=n_total,
-                    n_survived=n_survived,
-                    pct_survived=100.0 * n_survived / n_total))
+        for dt in density_thresholds:
+            n_survived = int((ld_arr < dt).sum())
+            rows.append(dict(
+                k=k, density_threshold=dt, n_total=n_total,
+                n_survived=n_survived,
+                pct_survived=100.0 * n_survived / n_total))
         stats = pd.DataFrame(rows)
 
-        # 4. One PNG per density threshold (Style C: stacked panels)
-        for dt in density_thresholds:
-            sub = stats[stats.density_threshold == dt].sort_values('k').reset_index(drop=True)
-            fig, (ax_top, ax_bot) = plt.subplots(
-                2, 1, figsize=(6, 6), sharex=True,
-                gridspec_kw={'height_ratios': [3, 1]})
+        # 4. One PNG for this k, sweeping density threshold (Style C: stacked panels)
+        fig, (ax_top, ax_bot) = plt.subplots(
+            2, 1, figsize=(11, 6.5), sharex=True,
+            gridspec_kw={'height_ratios': [3, 1]})
 
-            labels = sub.k.astype(str)
-            ax_top.bar(labels, sub.n_survived, color='#4C9F70', label='survived')
-            ax_top.bar(labels, sub.n_total - sub.n_survived,
-                       bottom=sub.n_survived, color='lightgray', label='filtered out')
-            ax_top.set_ylabel('Number of program replicates')
-            ax_top.set_title(f'Density filtering @ threshold = {dt}')
-            ax_top.legend(loc='upper left', frameon=False)
-            for x, (s, t) in enumerate(zip(sub.n_survived, sub.n_total)):
-                ax_top.text(x, t + 0.02 * sub.n_total.max(),
-                            f'{s}/{t}', ha='center', va='bottom', fontsize=8)
+        labels = stats.density_threshold.map(lambda x: f'{x:g}')
+        ax_top.bar(labels, stats.n_survived, color='#4C9F70', label='survived')
+        ax_top.bar(labels, stats.n_total - stats.n_survived,
+                   bottom=stats.n_survived, color='lightgray', label='filtered out')
+        ax_top.set_ylabel('Number of program replicates')
+        ax_top.set_title(f'Density filtering @ k = {k}', pad=25)
+        ax_top.legend(loc='upper left', frameon=False)
+        for x, (s, t) in enumerate(zip(stats.n_survived, stats.n_total)):
+            ax_top.text(x, t + 0.02 * stats.n_total.max(),
+                        f'{s}/{t}', ha='center', va='bottom', fontsize=8)
 
-            ax_bot.plot(labels, sub.pct_survived, 'o-', color='#4C9F70')
-            ax_bot.set_ylim(0, 105)
-            ax_bot.set_ylabel('% survived')
-            ax_bot.set_xlabel('Number of components (k)')
-            ax_bot.grid(True, alpha=0.3)
-            plt.tight_layout()
+        ax_bot.plot(labels, stats.pct_survived, 'o-', color='#4C9F70')
+        ax_bot.set_ylim(0, 105)
+        ax_bot.set_ylabel('% survived')
+        ax_bot.set_xlabel('Local density threshold')
+        ax_bot.grid(True, alpha=0.3)
+        plt.tight_layout()
 
-            dt_str = str(dt).replace('.', '_')
-            png_path = self.paths['density_filtering_plot'] % dt_str
-            fig.savefig(png_path, dpi=250)
-            if close_fig:
+        png_path = self.paths['density_filtering_plot'] % k
+        fig.savefig(png_path, dpi=250)
+        if close_fig:
+            plt.close(fig)
+        else:
+            # Render the saved PNG inline via IPython.Image, which works
+            # regardless of matplotlib backend state.
+            try:
+                from IPython.display import Image, display
                 plt.close(fig)
-            else:
-                # Render the saved PNG inline via IPython.Image, which works
-                # regardless of matplotlib backend state.
-                try:
-                    from IPython.display import Image, display
-                    plt.close(fig)
-                    display(Image(filename=png_path))
-                except ImportError:
-                    plt.show()
+                display(Image(filename=png_path))
+            except ImportError:
+                plt.show()
 
         return stats
 
@@ -2038,8 +2043,8 @@ def main():
     parser.add_argument('--alpha-spectra', type=float, help='[prepare] Regularization parameter for spectra matrix H (default 0.0)', default=0.0)
     parser.add_argument('--l1-ratio-usage', type=float, help='[prepare] L1 penalty ratio on W, between 0 and 1 (default 0.0)', default=0.0)
     parser.add_argument('--l1-ratio-spectra', type=float, help='[prepare] L1 penalty ratio on H, between 0 and 1 (default 0.0)', default=0.0)
-    parser.add_argument('--minibatch-usage-tol', type=float, help='[prepare] Tolerance for updating usages in minibatch (default 0.05)', default=0.05)
-    parser.add_argument('--minibatch-spectra-tol', type=float, help='[prepare] Tolerance for updating spectra in minibatch (default 0.05)', default=0.05)
+    parser.add_argument('--minibatch-usage-tol', type=float, help='[prepare] Tolerance for updating usages in minibatch (default 1e-7)', default=1e-7)
+    parser.add_argument('--minibatch-spectra-tol', type=float, help='[prepare] Tolerance for updating spectra in minibatch (default 1e-7)', default=1e-7)
     parser.add_argument('--fp-precision', type=str, choices=['float', 'double'], help='[prepare] Numeric precision (default float)', default='float')
     parser.add_argument('--batch-max-epoch', type=int, help='[prepare] Max epochs for batch learning (default 500)', default=500)
     parser.add_argument('--batch-hals-tol', type=float, help='[prepare] HALS tolerance for mimicking BPP (default 0.05)', default=0.05)
@@ -2105,7 +2110,13 @@ def main():
         cnmf_obj.k_selection_plot(close_fig=True)
 
     elif args.command == 'density_filtering_plot':
-        cnmf_obj.density_filtering_plot(close_fig=True)
+        if args.components is None:
+            k = None
+        elif type(args.components) is int:
+            k = args.components
+        else:
+            k = args.components[0]
+        cnmf_obj.density_filtering_plot(k=k, close_fig=True)
 
 if __name__=="__main__":
     main()
