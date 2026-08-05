@@ -264,6 +264,111 @@ class NMFDataset(Dataset):
     def __getitem__(self, idx):
         return self.X_cpu[idx], idx
 
+def _host_memory_bytes():
+    """
+    Best-effort ceiling on host memory this process may use.
+
+    Prefers the cgroup or Slurm allocation over the node total, since a batch job is
+    killed at its requested --mem long before the node itself runs out.
+    """
+    for path in ('/sys/fs/cgroup/memory.max',                      # cgroup v2
+                 '/sys/fs/cgroup/memory/memory.limit_in_bytes'):   # cgroup v1
+        try:
+            with open(path) as F:
+                value = F.read().strip()
+        except OSError:
+            continue
+        # An unset limit reads as "max" or as a sentinel far above real RAM.
+        if value.isdigit() and 0 < int(value) < 2**60:
+            return int(value)
+
+    mem_per_node = os.environ.get('SLURM_MEM_PER_NODE', '')
+    if mem_per_node.isdigit():
+        return int(mem_per_node) * 1024**2
+
+    mem_per_cpu = os.environ.get('SLURM_MEM_PER_CPU', '')
+    n_cpus = os.environ.get('SLURM_CPUS_ON_NODE', '')
+    if mem_per_cpu.isdigit() and n_cpus.isdigit():
+        return int(mem_per_cpu) * int(n_cpus) * 1024**2
+
+    return os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
+
+def suggest_refit_spectra_chunk(n_genes, n_cells, n_components, dtype=torch.float32,
+                                device='cuda', total_bytes=None, fraction=0.25):
+    """
+    Suggest how many genes to put in one batch when refitting spectra.
+
+    refit_spectra() passes a transposed matrix to refit_usage(), so the online solvers
+    batch along genes while every row still carries one value per cell. A minibatch_size
+    chosen for cells is far too large in this orientation -- at 1.7M cells a single
+    10,000-gene batch is ~65 GiB. This sizes the batch from the cell count instead.
+
+    Parameters
+    ----------
+    n_genes : int
+        Rows of the transposed matrix, i.e. genes in the TPM matrix. This is the full
+        gene set, not the overdispersed subset used for factorization.
+
+    n_cells : int
+        Columns of the transposed matrix, carried whole into every batch.
+
+    n_components : int
+        k. Sets the size of the basis kept resident for the whole solve.
+
+    dtype : torch.dtype, optional (default=torch.float32)
+        Precision the batch is cast to; should match the dtype given to the solver.
+
+    device : string, optional (default='cuda')
+        Where the solver will run. On CPU the densified matrix and the batch share one
+        pool, so the accounting differs from the GPU case.
+
+    total_bytes : int, optional (default=None)
+        Memory to budget against. None queries the CUDA device or, on CPU, the cgroup
+        and Slurm limits.
+
+    fraction : float, optional (default=0.25)
+        Share of the memory left over after the unavoidable allocations that one batch
+        may occupy. The remainder covers solver temporaries and fragmentation.
+
+    Returns
+    -------
+    int
+        Genes per batch, clamped to [1, n_genes].
+    """
+    itemsize = torch.empty(0, dtype=dtype).element_size()
+    on_gpu = str(device).startswith('cuda')
+
+    if total_bytes is None:
+        if on_gpu:
+            if not torch.cuda.is_available():
+                raise ValueError("No CUDA device available to query; pass total_bytes explicitly.")
+            total_bytes = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory
+        else:
+            total_bytes = _host_memory_bytes()
+
+    # The (k x cells) basis and the (genes x k) spectra live alongside the batch throughout.
+    resident = (n_components * n_cells + n_genes * n_components) * itemsize
+
+    if on_gpu:
+        # Only the basis and the batch reach the device; the dense matrix stays in host RAM.
+        per_gene = (n_cells + 2 * n_components) * itemsize
+    else:
+        # Everything shares host RAM, including the matrix fit_H_online_* densifies up front.
+        resident += n_genes * n_cells * itemsize
+        # .to("cpu") is a no-op, but collate still stacks a batch and pin_memory copies it.
+        per_gene = (2 * n_cells + 2 * n_components) * itemsize
+
+    headroom = total_bytes - resident
+    if headroom <= 0:
+        warnings.warn(
+            "Refit needs %.1f GiB resident before any batching, but only %.1f GiB is "
+            "available -- no chunk size will make this fit. Cut the gene set, fall back to "
+            "sk_cd_refit, or request more memory." % (resident / 1024**3, total_bytes / 1024**3),
+            UserWarning)
+        return 1
+
+    return int(min(max(headroom * fraction // per_gene, 1), n_genes))
+
 def fit_H_online_mu(
     X,
     W,
@@ -526,7 +631,6 @@ def fit_H_online_hals_DL(
     epsilon=1e-16,
     device="cpu",
     dtype=torch.float32,
-    n_jobs=-1
     ):
     """
     Online HALS update to fit H only given fixed W, using PyTorch DataLoader
@@ -556,8 +660,6 @@ def fit_H_online_hals_DL(
         Torch device, e.g. "cpu" or "cuda".
     dtype : torch.dtype
         Tensor precision (default torch.float32).
-    n_jobs : int
-        Number of DataLoader workers. -1 uses 0 workers (main process).
 
     Returns
     -------
@@ -879,10 +981,8 @@ class cNMF():
 
         #Alexandra's edit to add new methods:
 
-        ## Gene names must be unique: downstream steps index genes by name
-        ## (counts[:, high_variance_genes_filter] here, tpm[:, hvgs] and
-        ## tpm_stats.loc[hvgs] in consensus) and break on repeated var_names
-        input_counts.var_names_make_unique()
+
+       # input_counts.var_names_make_unique() might cause problem in use given gene file to select hvg
 
         self.sk_cd_refit = sk_cd_refit # store parameter for later use in refit
         self.seed = seed # seed to generate all NMF seeds
@@ -1342,7 +1442,13 @@ class cNMF():
             print('No spectra found for k=%d' % k)
         return combined_spectra
     
-    def refit_usage(self, X, spectra, usage=None):
+    def _refit_device(self, refit_nmf_kwargs):
+        """Device the torch refit solvers will run on, given the stored run parameters."""
+        if refit_nmf_kwargs['use_gpu'] and torch.cuda.is_available():
+            return 'cuda'
+        return 'cpu'
+
+    def refit_usage(self, X, spectra, usage=None, chunk_size=None):
         """
         Takes an input data matrix and a fixed spectra and uses NNLS to find the optimal
         usage matrix. Generic kwargs for NMF are loaded from self.paths['nmf_run_parameters'].
@@ -1356,6 +1462,12 @@ class cNMF():
 
         spectra : pandas.DataFrame or numpy.ndarray, programs X genes
             Non-negative spectra of expression programs
+
+        chunk_size : int, optional (default=None)
+            Rows of X per minibatch for the torch solvers. None uses the minibatch_size
+            stored at prepare time, which is scaled for cells and so is only meaningful
+            when X really is cells X genes. refit_spectra() passes its own value because
+            the transpose puts genes on axis 0. Ignored when sk_cd_refit is set.
         """
 
         refit_nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
@@ -1420,14 +1532,17 @@ class cNMF():
 
 
         # Choose device
-        device_type = 'cpu'
+        device_type = self._refit_device(refit_nmf_kwargs)
         if refit_nmf_kwargs['use_gpu']:
-            if torch.cuda.is_available():
-                device_type = 'cuda'
+            if device_type == 'cuda':
                 print("Use GPU mode.")
             else:
                 print("CUDA is not available on your machine. Use CPU mode instead.")
 
+        # Unless the caller sized the batch itself, fall back to the value stored at
+        # prepare time.
+        if chunk_size is None:
+            chunk_size = refit_nmf_kwargs['minibatch_size']
 
         # Refit usages (denoted H here)
         if refit_nmf_kwargs['algo']=='mu':
@@ -1437,7 +1552,7 @@ class cNMF():
                             X,
                             spectra,
                             H_init=usage,
-                            chunk_size= refit_nmf_kwargs['minibatch_size'],
+                            chunk_size=chunk_size,
                             chunk_max_iter = refit_nmf_kwargs['minibatch_max_iter'],
                             h_tol= refit_nmf_kwargs['minibatch_h_tol'],
                             l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
@@ -1456,7 +1571,7 @@ class cNMF():
                             X,
                             spectra,
                             H_init=usage,
-                            chunk_size=refit_nmf_kwargs['minibatch_size'],
+                            chunk_size=chunk_size,
                             chunk_max_iter=refit_nmf_kwargs['minibatch_max_iter'],
                             h_tol=refit_nmf_kwargs['minibatch_h_tol'],
                             l1_reg_H=refit_nmf_kwargs['l1_ratio_H'],
@@ -1474,8 +1589,7 @@ class cNMF():
             
 
         return (rf_usages)
-    
-    
+       
     def refit_spectra(self, X, usage):
         """
         Takes an input data matrix and a fixed usage matrix and uses NNLS to find the optimal
@@ -1491,7 +1605,23 @@ class cNMF():
         usage : pandas.DataFrame or numpy.ndarray, cells X programs
             Non-negative spectra of expression programs
         """
-        return(self.refit_usage(X.T, usage.T).T)
+        # The solvers batch along axis 0, which the transpose turns into genes while every
+        # row still carries one value per cell. minibatch_size is scaled for cells and is
+        # orders of magnitude too large in this orientation, so size the batch from the
+        # cell count instead. The sklearn refit does not batch, so skip the work there.
+        chunk_size = None
+        if not self.sk_cd_refit:
+            refit_nmf_kwargs = yaml.load(open(self.paths['nmf_run_parameters']), Loader=yaml.FullLoader)
+            chunk_size = suggest_refit_spectra_chunk(
+                n_genes=X.shape[1],
+                n_cells=X.shape[0],
+                n_components=usage.shape[1],
+                device=self._refit_device(refit_nmf_kwargs),
+            )
+            print("refit_spectra: %d of %d genes per batch (%d cells carried per row)"
+                  % (chunk_size, X.shape[1], X.shape[0]))
+
+        return(self.refit_usage(X.T, usage.T, chunk_size=chunk_size).T)
 
     def consensus(self, k, density_threshold=0.5, local_neighborhood_size=0.30, show_clustering=True,
                   build_ref=True, skip_density_and_return_after_stats=False, close_clustergram_fig=False,
@@ -1999,20 +2129,25 @@ class cNMF():
 
 def main():
     """
+    Flag names and defaults follow the PerturbNMF wrapper
+    (Stage1_Inference/torch-cNMF/Slurm_Version/torch_cnmf_inference_pipeline.py) so the
+    same values mean the same thing whichever entry point is used. The older dashed
+    spellings are kept as aliases.
+
     Example commands:
 
-        output_dir="./cnmf_test/"
+        output_directory="./cnmf_test/"
 
 
-        python cnmf.py prepare --output-dir $output_dir \
-           --name test --counts ./cnmf_test/test_data.df.npz \
-           -k 6 7 8 9 --n-iter 5
+        python cnmf.py prepare --output_directory $output_directory \
+           --run_name test --counts_fn ./cnmf_test/test_data.df.npz \
+           -k 6 7 8 9 --numiter 5
 
-        python cnmf.py factorize  --name test --output-dir $output_dir
+        python cnmf.py factorize  --run_name test --output_directory $output_directory
 
-        python cnmf.py combine  --name test --output-dir $output_dir
+        python cnmf.py combine  --run_name test --output_directory $output_directory
 
-        python cnmf.py consensus  --name test --output-dir $output_dir
+        python cnmf.py consensus  --run_name test --output_directory $output_directory
 
     """
 
@@ -2020,60 +2155,60 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('command', type=str, choices=['prepare', 'factorize', 'combine', 'consensus', 'k_selection_plot', 'density_filtering_plot'])
-    parser.add_argument('--name', type=str, help='[all] Name for analysis. All output will be placed in [output-dir]/[name]/...', nargs='?', default='cNMF')
-    parser.add_argument('--output-dir', type=str, help='[all] Output directory. All output will be placed in [output-dir]/[name]/...', nargs='?', default='.')
-    parser.add_argument('-c', '--counts', type=str, help='[prepare] Input (cell x gene) counts matrix as .h5ad, .mtx, df.npz, or tab delimited text file')
-    parser.add_argument('-k', '--components', type=int, help='[prepare] Numper of components (k) for matrix factorization. Several can be specified with "-k 8 9 10"', nargs='+')
-    parser.add_argument('-n', '--n-iter', type=int, help='[prepare] Number of factorization replicates', default=100)
+    parser.add_argument('--run_name', '--name', type=str, help='[all] Name for analysis. All output will be placed in [output_directory]/[run_name]/...', nargs='?', default='cNMF')
+    parser.add_argument('--output_directory', '--output-dir', type=str, help='[all] Output directory. All output will be placed in [output_directory]/[run_name]/...', nargs='?', default='.')
+    parser.add_argument('--counts_fn', '-c', '--counts', type=str, help='[prepare] Input (cell x gene) counts matrix as .h5ad, .mtx, df.npz, or tab delimited text file')
+    parser.add_argument('--K', '-k', '--components', type=int, help='[prepare] Numper of components (k) for matrix factorization. Several can be specified with "-k 8 9 10". Left unset, consensus and combine use every k found on disk.', nargs='+')
+    parser.add_argument('--numiter', '-n', '--n-iter', type=int, help='[prepare] Number of factorization replicates', default=10)
     parser.add_argument('--use_gpu', action='store_true', help='[prepare] Whether to use GPU.', default=False)
-    parser.add_argument('--seed', type=int, help='[prepare] Seed for pseudorandom number generation', default=None)
-    parser.add_argument('--genes-file', type=str, help='[prepare] File containing a list of genes to include, one gene per line. Must match column labels of counts matrix.', default=None)
-    parser.add_argument('--numgenes', type=int, help='[prepare] Number of high variance genes to use for matrix factorization.', default=2000)
-    parser.add_argument('--tpm', type=str, help='[prepare] Pre-computed (cell x gene) TPM values as df.npz or tab separated txt file. If not provided TPM will be calculated automatically', default=None)
-    parser.add_argument('--beta-loss', type=str, choices=['frobenius', 'kullback-leibler', 'itakura-saito'], help='[prepare] Loss function for NMF (default frobenius)', default='frobenius')
+    parser.add_argument('--seed', type=int, help='[prepare] Seed for pseudorandom number generation', default=14)
+    parser.add_argument('--genes_file', type=str, help='[prepare] File containing a list of genes to include, one gene per line. Must match column labels of counts matrix.', default=None)
+    parser.add_argument('--numhvgenes', '--numgenes', type=int, help='[prepare] Number of high variance genes to use for matrix factorization.', default=2000)
+    parser.add_argument('--tpm_fn', '--tpm', type=str, help='[prepare] Pre-computed (cell x gene) TPM values as df.npz or tab separated txt file. If not provided TPM will be calculated automatically', default=None)
+    parser.add_argument('--loss', '--beta-loss', type=str, choices=['frobenius', 'kullback-leibler', 'itakura-saito'], help='[prepare] Loss function for NMF (default frobenius)', default='frobenius')
     parser.add_argument('--init', type=str, choices=['random', 'nndsvd'], help='[prepare] Initialization algorithm for NMF (default random)', default='random')
     parser.add_argument('--densify', dest='densify', help='[prepare] Treat the input data as non-sparse (default False)', action='store_true', default=False)
-    parser.add_argument('--batch_size', type=int, help='[prepare] Size of batch for online NMF learning.', default=5000)
-    parser.add_argument('--shuffle', dest='minibatch_shuffle', action='store_true', help='[prepare] Enable shuffling of samples across mini-batches each epoch.', default=False)
+    parser.add_argument('--minibatch_size', '--batch_size', type=int, help='[prepare] Size of batch for online NMF learning. Counted in cells; refit_spectra sizes its own gene batches.', default=100000)
+    parser.add_argument('--minibatch_shuffle', '--shuffle', action='store_true', help='[prepare] Enable shuffling of samples across mini-batches each epoch.', default=False)
     parser.add_argument('--algo', type=str, choices=['mu', 'hals', 'halsvar', 'bpp'], help='[prepare] NMF algorithm (default halsvar)', default='halsvar')
     parser.add_argument('--mode', type=str, choices=['batch', 'minibatch', 'dataloader'], help='[prepare] Learning mode (default batch). minibatch and dataloader only work with frobenius loss.', default='batch')
-    parser.add_argument('--tol', type=float, help='[prepare] Tolerance for convergence check (default 1e-4)', default=1e-4)
-    parser.add_argument('--n-jobs', type=int, help='[prepare] Number of CPU threads. -1 uses PyTorch default.', default=-1)
-    parser.add_argument('--alpha-usage', type=float, help='[prepare] Regularization parameter for usage matrix W (default 0.0)', default=0.0)
-    parser.add_argument('--alpha-spectra', type=float, help='[prepare] Regularization parameter for spectra matrix H (default 0.0)', default=0.0)
-    parser.add_argument('--l1-ratio-usage', type=float, help='[prepare] L1 penalty ratio on W, between 0 and 1 (default 0.0)', default=0.0)
-    parser.add_argument('--l1-ratio-spectra', type=float, help='[prepare] L1 penalty ratio on H, between 0 and 1 (default 0.0)', default=0.0)
-    parser.add_argument('--minibatch-usage-tol', type=float, help='[prepare] Tolerance for updating usages in minibatch (default 1e-7)', default=1e-7)
-    parser.add_argument('--minibatch-spectra-tol', type=float, help='[prepare] Tolerance for updating spectra in minibatch (default 1e-7)', default=1e-7)
-    parser.add_argument('--fp-precision', type=str, choices=['float', 'double'], help='[prepare] Numeric precision (default float)', default='float')
-    parser.add_argument('--batch-max-epoch', type=int, help='[prepare] Max epochs for batch learning (default 500)', default=500)
-    parser.add_argument('--batch-hals-tol', type=float, help='[prepare] HALS tolerance for mimicking BPP (default 0.05)', default=0.05)
-    parser.add_argument('--batch-hals-max-iter', type=int, help='[prepare] Max HALS iterations for H/W update (default 200)', default=200)
-    parser.add_argument('--minibatch-max-epoch', type=int, help='[prepare] Max minibatch passes over all data (default 20)', default=20)
-    parser.add_argument('--minibatch-max-iter', type=int, help='[prepare] Max iterations for H/W update in minibatch (default 200)', default=200)
-    parser.add_argument('--sk-cd-refit', action='store_true', help='[prepare] Reuse sklearn solver for refit step (default False)', default=False)
-    parser.add_argument('--nmf-seeds-file', type=str, help='[prepare] Path to a text file with NMF seeds (one integer per line)', default=None)
-    parser.add_argument('--skip-completed-runs', action='store_true', help='[factorize] Skip previously completed runs. Must re-run prepare first to update completed runs', default=False)
-    parser.add_argument('--local-density-threshold', type=float, help='[consensus] Threshold for the local density filtering. This string must convert to a float >0 and <=2', default=0.5)
-    parser.add_argument('--local-neighborhood-size', type=float, help='[consensus] Fraction of the number of replicates to use as nearest neighbors for local density filtering', default=0.30)
-    parser.add_argument('--show-clustering', dest='show_clustering', help='[consensus] Produce a clustergram figure summarizing the spectra clustering', action='store_true')
-    parser.add_argument('--build-reference', dest='build_reference', help='[consensus] Generates a reference spectra for use in starCAT', action='store_true', default=True)
+    parser.add_argument('--tol', type=float, help='[prepare] Tolerance for convergence check (default 1e-7)', default=1e-7)
+    parser.add_argument('--n_jobs', '--n-jobs', type=int, help='[prepare] Number of CPU threads. -1 uses PyTorch default.', default=-1)
+    parser.add_argument('--alpha_usage', '--alpha-usage', type=float, help='[prepare] Regularization parameter for usage matrix W (default 0.0)', default=0.0)
+    parser.add_argument('--alpha_spectra', '--alpha-spectra', type=float, help='[prepare] Regularization parameter for spectra matrix H (default 0.0)', default=0.0)
+    parser.add_argument('--l1_ratio_usage', '--l1-ratio-usage', type=float, help='[prepare] L1 penalty ratio on W, between 0 and 1 (default 0.0)', default=0.0)
+    parser.add_argument('--l1_ratio_spectra', '--l1-ratio-spectra', type=float, help='[prepare] L1 penalty ratio on H, between 0 and 1 (default 0.0)', default=0.0)
+    parser.add_argument('--minibatch_usage_tol', '--minibatch-usage-tol', type=float, help='[prepare] Tolerance for updating usages in minibatch (default 0.005)', default=0.005)
+    parser.add_argument('--minibatch_spectra_tol', '--minibatch-spectra-tol', type=float, help='[prepare] Tolerance for updating spectra in minibatch (default 0.005)', default=0.005)
+    parser.add_argument('--fp_precision', '--fp-precision', type=str, choices=['float', 'double'], help='[prepare] Numeric precision (default float)', default='float')
+    parser.add_argument('--batch_max_epoch', '--batch-max-epoch', type=int, help='[prepare] Max epochs for batch learning (default 1000)', default=1000)
+    parser.add_argument('--batch_hals_tol', '--batch-hals-tol', type=float, help='[prepare] HALS tolerance for mimicking BPP (default 0.005)', default=0.005)
+    parser.add_argument('--batch_hals_max_iter', '--batch-hals-max-iter', type=int, help='[prepare] Max HALS iterations for H/W update (default 1000)', default=1000)
+    parser.add_argument('--minibatch_max_epoch', '--minibatch-max-epoch', type=int, help='[prepare] Max minibatch passes over all data (default 1000)', default=1000)
+    parser.add_argument('--minibatch_max_iter', '--minibatch-max-iter', type=int, help='[prepare] Max iterations for H/W update in minibatch (default 1000)', default=1000)
+    parser.add_argument('--sk_cd_refit', '--sk-cd-refit', action='store_true', help='[prepare] Reuse sklearn solver for refit step (default False)', default=False)
+    parser.add_argument('--nmf_seeds_path', '--nmf-seeds-file', type=str, help='[prepare] Path to a text file with NMF seeds (one integer per line)', default=None)
+    parser.add_argument('--skip_existing', '--skip-completed-runs', action='store_true', help='[factorize] Skip previously completed runs. Must re-run prepare first to update completed runs', default=False)
+    parser.add_argument('--sel_threshs', '--local-density-threshold', type=float, nargs='*', help='[consensus] Thresholds for the local density filtering. Each must convert to a float >0 and <=2; consensus runs once per threshold', default=[0.2, 2.0])
+    parser.add_argument('--local_neighborhood_size', '--local-neighborhood-size', type=float, help='[consensus] Fraction of the number of replicates to use as nearest neighbors for local density filtering', default=0.30)
+    parser.add_argument('--show_clustering', '--show-clustering', dest='show_clustering', help='[consensus] Produce a clustergram figure summarizing the spectra clustering', action='store_true')
+    parser.add_argument('--build_reference', '--build-reference', dest='build_reference', help='[consensus] Generates a reference spectra for use in starCAT', action='store_true', default=True)
 
-    
+
     args = parser.parse_args()
 
     # Load NMF seeds from file if provided
     nmf_seeds = None
-    if args.nmf_seeds_file is not None:
-        nmf_seeds = np.load(args.nmf_seeds_file)
+    if args.nmf_seeds_path is not None:
+        nmf_seeds = np.load(args.nmf_seeds_path)
 
-    cnmf_obj = cNMF(output_dir=args.output_dir, name=args.name)
+    cnmf_obj = cNMF(output_dir=args.output_directory, name=args.run_name)
 
     if args.command == 'prepare':
-        cnmf_obj.prepare(args.counts, components=args.components, n_iter=args.n_iter, densify=args.densify,
-                         tpm_fn=args.tpm, seed=args.seed, beta_loss=args.beta_loss,
-                         num_highvar_genes=args.numgenes, genes_file=args.genes_file, init=args.init,
-                         use_gpu=args.use_gpu, minibatch_size=args.batch_size,
+        cnmf_obj.prepare(args.counts_fn, components=args.K, n_iter=args.numiter, densify=args.densify,
+                         tpm_fn=args.tpm_fn, seed=args.seed, beta_loss=args.loss,
+                         num_highvar_genes=args.numhvgenes, genes_file=args.genes_file, init=args.init,
+                         use_gpu=args.use_gpu, minibatch_size=args.minibatch_size,
                          minibatch_shuffle=args.minibatch_shuffle,
                          algo=args.algo, mode=args.mode, tol=args.tol, n_jobs=args.n_jobs,
                          alpha_usage=args.alpha_usage, alpha_spectra=args.alpha_spectra,
@@ -2086,36 +2221,37 @@ def main():
                          sk_cd_refit=args.sk_cd_refit, nmf_seeds=nmf_seeds)
 
     elif args.command == 'factorize':
-        cnmf_obj.factorize(skip_completed_runs=args.skip_completed_runs)
+        cnmf_obj.factorize(skip_completed_runs=args.skip_existing)
 
     elif args.command == 'combine':
-        cnmf_obj.combine(components=args.components)
+        cnmf_obj.combine(components=args.K)
 
     elif args.command == 'consensus':
         run_params = load_df_from_npz(cnmf_obj.paths['nmf_replicate_parameters'])
 
-        if type(args.components) is int:
-            ks = [args.components]
-        elif args.components is None:
+        if type(args.K) is int:
+            ks = [args.K]
+        elif args.K is None:
             ks = sorted(set(run_params.n_components))
         else:
-            ks = args.components
+            ks = args.K
 
         for k in ks:
             merged_spectra = load_df_from_npz(cnmf_obj.paths['merged_spectra']%k)
-            cnmf_obj.consensus(k, args.local_density_threshold, args.local_neighborhood_size, args.show_clustering,
-                               args.build_reference, close_clustergram_fig=True)
+            for density_threshold in args.sel_threshs:
+                cnmf_obj.consensus(k, density_threshold, args.local_neighborhood_size, args.show_clustering,
+                                   args.build_reference, close_clustergram_fig=True)
 
     elif args.command == 'k_selection_plot':
         cnmf_obj.k_selection_plot(close_fig=True)
 
     elif args.command == 'density_filtering_plot':
-        if args.components is None:
+        if args.K is None:
             k = None
-        elif type(args.components) is int:
-            k = args.components
+        elif type(args.K) is int:
+            k = args.K
         else:
-            k = args.components[0]
+            k = args.K[0]
         cnmf_obj.density_filtering_plot(k=k, close_fig=True)
 
 if __name__=="__main__":
