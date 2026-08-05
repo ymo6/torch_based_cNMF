@@ -293,6 +293,33 @@ def _host_memory_bytes():
 
     return os.sysconf('SC_PHYS_PAGES') * os.sysconf('SC_PAGE_SIZE')
 
+def resolve_fp_precision(fp_precision):
+    """
+    Map the fp_precision run parameter onto a torch dtype.
+
+    Matches the mapping nmf_torch applies to the factorization so the refit runs at the
+    precision the run was prepared with, rather than silently at float32.
+
+    Parameters
+    ----------
+    fp_precision : string or torch.dtype
+        ``'float'`` for torch.float32, ``'double'`` for torch.float64, or a torch dtype
+        to use as-is.
+
+    Returns
+    -------
+    torch.dtype
+    """
+    if isinstance(fp_precision, torch.dtype):
+        return fp_precision
+    if fp_precision == 'float':
+        return torch.float32
+    if fp_precision == 'double':
+        return torch.float64
+    raise ValueError("fp_precision must be 'float', 'double', or a torch.dtype. Got %s"
+                     % repr(fp_precision))
+
+
 def suggest_refit_spectra_chunk(n_genes, n_cells, n_components, dtype=torch.float32,
                                 device='cuda', total_bytes=None, fraction=0.25):
     """
@@ -512,7 +539,8 @@ def fit_H_online_hals(
     l1_reg_H=0.0,
     l2_reg_H=0.0,
     epsilon=1e-16,
-    device="cpu"
+    device="cpu",
+    dtype=torch.float32
     ):
     """
     Online HALS update to fit H only given fixed W, matching MU solver signature.
@@ -539,6 +567,9 @@ def fit_H_online_hals(
         Ignored (HALS does not use epsilon).
     device : str
         Torch device, e.g. "cpu" or "cuda".
+    dtype : torch.dtype
+        Tensor precision (default torch.float32). Use torch.float64 for higher
+        precision (e.g. to converge below the float32 reconstruction-loss floor).
 
     Returns
     -------
@@ -575,7 +606,6 @@ def fit_H_online_hals(
 
     # Move to torch
     dev = torch.device(device)
-    dtype = torch.float32
     X_t = torch.from_numpy(X).to(device=dev, dtype=dtype)
     W_t = torch.from_numpy(W).to(device=dev, dtype=dtype)
 
@@ -1544,6 +1574,10 @@ class cNMF():
         if chunk_size is None:
             chunk_size = refit_nmf_kwargs['minibatch_size']
 
+        # Refit at the precision the factorization ran at. Runs prepared before
+        # fp_precision was recorded fall back to the float default.
+        dtype = resolve_fp_precision(refit_nmf_kwargs.get('fp_precision', 'float'))
+
         # Refit usages (denoted H here)
         if refit_nmf_kwargs['algo']=='mu':
             print("Using torch nmf multiplicative update to refit")
@@ -1558,7 +1592,8 @@ class cNMF():
                             l1_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             l2_reg_H = refit_nmf_kwargs['l1_ratio_H'],
                             epsilon = 1e-16,
-                            device = device_type
+                            device = device_type,
+                            dtype = dtype,
                             )
             print("multiplicative update refit completed")
 
@@ -1577,7 +1612,7 @@ class cNMF():
                             l1_reg_H=refit_nmf_kwargs['l1_ratio_H'],
                             l2_reg_H=refit_nmf_kwargs['l1_ratio_H'],
                             device=device_type,
-                            dtype=torch.float32,
+                            dtype=dtype,
                             )
             print("HALS DataLoader refit completed")
 
@@ -1616,6 +1651,7 @@ class cNMF():
                 n_genes=X.shape[1],
                 n_cells=X.shape[0],
                 n_components=usage.shape[1],
+                dtype=resolve_fp_precision(refit_nmf_kwargs.get('fp_precision', 'float')),
                 device=self._refit_device(refit_nmf_kwargs),
             )
             print("refit_spectra: %d of %d genes per batch (%d cells carried per row)"
