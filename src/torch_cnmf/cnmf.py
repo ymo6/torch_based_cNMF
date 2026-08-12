@@ -1036,13 +1036,19 @@ class cNMF():
             input_counts.X = np.array(input_counts.X.todense())
 
         # check genes with zero variance (includes zero expression genes)
-        if sp.issparse(input_counts.X):
-            gene_means = np.array(input_counts.X.mean(axis=0)).flatten()
-            gene_vars = np.array(input_counts.X.power(2).mean(axis=0)).flatten() - gene_means**2
-        else:
-            gene_vars = input_counts.X.var(axis=0, ddof=1)
+        # Use the same estimator as the TPM stats below: StandardScaler accepts
+        # sparse and dense input alike and computes a centered (two-pass)
+        # variance, so both branches agree and constant genes come out at
+        # exactly 0. The old sparse formula E[X^2] - E[X]^2 cancels
+        # catastrophically for highly expressed genes (a gene constant at c has
+        # both terms ~c^2, leaving float noise ~1e-16*c^2 instead of 0), so such
+        # genes escaped this filter and produced inf/NaN later in
+        # get_norm_counts when dividing by their standard deviation.
+        gene_means, gene_vars = get_mean_var(input_counts.X)
+        gene_means = np.asarray(gene_means).reshape(-1)
+        gene_vars = np.asarray(gene_vars).reshape(-1)
 
-        zero_variance_genes = gene_vars == 0
+        zero_variance_genes = gene_vars <= 0
         n_zero_var = zero_variance_genes.sum()
         print(f"Number of genes with zero variance: {n_zero_var}")
 
