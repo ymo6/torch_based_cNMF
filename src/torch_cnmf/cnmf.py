@@ -1057,6 +1057,9 @@ class cNMF():
             zero_var_gene_names = input_counts.var_names[zero_variance_genes]
             input_counts = input_counts[:, ~zero_variance_genes].copy()
             print(f"Genes with zero variance removed: {zero_var_gene_names.tolist()}")
+
+        # drop cells with none gene detected
+        sc.pp.filter_cells(input_counts, min_genes = 1)
   
         if tpm_fn is None:
             tpm = compute_tpm(input_counts)
