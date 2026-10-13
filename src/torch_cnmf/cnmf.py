@@ -836,6 +836,8 @@ class cNMF():
                 'consensus_spectra__txt': os.path.join(self.output_dir, self.name, self.name+'.spectra.k_%d.dt_%s.consensus.txt'),
                 'consensus_usages': os.path.join(self.output_dir, self.name, 'cnmf_tmp',self.name+'.usages.k_%d.dt_%s.consensus.df.npz'),
                 'consensus_usages__txt': os.path.join(self.output_dir, self.name, self.name+'.usages.k_%d.dt_%s.consensus.txt'),
+                'consensus_usages_median': os.path.join(self.output_dir, self.name, 'cnmf_tmp',self.name+'.usages.k_%d.dt_%s.consensus_median.df.npz'),
+                'consensus_usages_median__txt': os.path.join(self.output_dir, self.name, self.name+'.usages.k_%d.dt_%s.consensus_median.txt'),
 
                 'consensus_stats': os.path.join(self.output_dir, self.name, 'cnmf_tmp', self.name+'.stats.k_%d.dt_%s.df.npz'),
 
@@ -1837,14 +1839,20 @@ class cNMF():
             spectra_tpm_rf = spectra_tpm.loc[:,hvgs]
 
             spectra_tpm_rf = spectra_tpm_rf.div(tpm_stats.loc[hvgs, '__std'], axis=1)
-            rf_usages = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype))
-            rf_usages = pd.DataFrame(rf_usages, index=norm_counts.obs.index, columns=spectra_tpm_rf.index)                                                                  
+            rf_usages_tpm = self.refit_usage(norm_tpm.X, spectra_tpm_rf.astype(norm_tpm.X.dtype))
+            rf_usages_tpm = pd.DataFrame(rf_usages_tpm, index=norm_counts.obs.index, columns=spectra_tpm_rf.index)                                                                  
                
+        # rf_usages: usages fit to norm_counts with median_spectra (reconstructs norm_counts).
+        # rf_usages_tpm: usages refit to std-scaled HVG TPM (only when refit_usage=True).
+        # consensus_usages keeps the final usages, as before; consensus_usages_median is always rf_usages.
+        final_usages = rf_usages_tpm if refit_usage else rf_usages
         save_df_to_npz(median_spectra, self.paths['consensus_spectra']%(k, density_threshold_repl))
-        save_df_to_npz(rf_usages, self.paths['consensus_usages']%(k, density_threshold_repl))
+        save_df_to_npz(final_usages, self.paths['consensus_usages']%(k, density_threshold_repl))
+        save_df_to_npz(rf_usages, self.paths['consensus_usages_median']%(k, density_threshold_repl))
         #save_df_to_npz(consensus_stats, self.paths['consensus_stats']%(k, density_threshold_repl))
         save_df_to_text(median_spectra, self.paths['consensus_spectra__txt']%(k, density_threshold_repl))
-        save_df_to_text(rf_usages, self.paths['consensus_usages__txt']%(k, density_threshold_repl))
+        save_df_to_text(final_usages, self.paths['consensus_usages__txt']%(k, density_threshold_repl))
+        save_df_to_text(rf_usages, self.paths['consensus_usages_median__txt']%(k, density_threshold_repl))
         save_df_to_npz(spectra_tpm, self.paths['gene_spectra_tpm']%(k, density_threshold_repl))
         save_df_to_text(spectra_tpm, self.paths['gene_spectra_tpm__txt']%(k, density_threshold_repl))
         save_df_to_npz(usage_coef, self.paths['gene_spectra_score']%(k, density_threshold_repl))
