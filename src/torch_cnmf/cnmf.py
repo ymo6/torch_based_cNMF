@@ -866,7 +866,8 @@ class cNMF():
                         fp_precision: Union[str, torch.dtype] = "float",
                         batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
                         minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
-                        minibatch_shuffle: bool = True,
+                        minibatch_shuffle: bool = True, minibatch_rescale: bool = True,
+                        minibatch_patience: Optional[int] = 10,
                         sk_cd_refit=True,nmf_seeds = None
                         ):
         """
@@ -972,6 +973,16 @@ class cNMF():
 
         minibatch_max_iter: ``int``, optional, default: ``200``
             The maximum number of iterations for updating H or W in minibatch learning.
+
+        minibatch_rescale: ``bool``, optional, default: ``True``
+            Rescale each spectra row to unit L2 norm after every epoch (usages scaled to compensate,
+            so the loss is unchanged). Prevents float32 overflow of drifting spectra rows. HALS in
+            minibatch/dataloader mode only; ignored when any regularization is on.
+
+        minibatch_patience: ``int`` or ``None``, optional, default: ``10``
+            Check the loss every epoch and stop after this many epochs without a new best loss
+            (W/H restored to the best epoch). None or 0 keeps the original rule (loss every
+            10 epochs, stop on the first increase). HALS minibatch/dataloader only.
 
         minibatch_spectra_tol: ``float``, optional, default: 1e-7
             The tolerance for updating spectra (W) in each mini-batch.
@@ -1119,7 +1130,8 @@ class cNMF():
                                                                   fp_precision=fp_precision,
                                                                   batch_max_epoch=batch_max_epoch, batch_hals_tol=batch_hals_tol, batch_hals_max_iter=batch_hals_max_iter,
                                                                   minibatch_max_epoch=minibatch_max_epoch, minibatch_size=minibatch_size, minibatch_max_iter=minibatch_max_iter,
-                                                                  minibatch_shuffle=minibatch_shuffle
+                                                                  minibatch_shuffle=minibatch_shuffle, minibatch_rescale=minibatch_rescale,
+                                                                  minibatch_patience=minibatch_patience
                                                                   )
         self.save_nmf_iter_params(replicate_params, run_params)
         
@@ -1230,7 +1242,8 @@ class cNMF():
                             fp_precision: Union[str, torch.dtype] = "float",
                             batch_max_epoch: int = 500,batch_hals_tol: float = 0.05, batch_hals_max_iter: int = 200,
                             minibatch_max_epoch: int = 20, minibatch_size: int = 5000, minibatch_max_iter: int = 200,
-                            minibatch_shuffle: bool = True):
+                            minibatch_shuffle: bool = True, minibatch_rescale: bool = True,
+                            minibatch_patience: Optional[int] = 10):
         """
         Create a DataFrame with parameters for NMF iterations.
 
@@ -1318,6 +1331,16 @@ class cNMF():
         minibatch_max_iter: ``int``, optional, default: ``200``
             The maximum number of iterations for updating H or W in minibatch learning.
 
+        minibatch_rescale: ``bool``, optional, default: ``True``
+            Rescale each spectra row to unit L2 norm after every epoch (usages scaled to compensate,
+            so the loss is unchanged). Prevents float32 overflow of drifting spectra rows. HALS in
+            minibatch/dataloader mode only; ignored when any regularization is on.
+
+        minibatch_patience: ``int`` or ``None``, optional, default: ``10``
+            Check the loss every epoch and stop after this many epochs without a new best loss
+            (W/H restored to the best epoch). None or 0 keeps the original rule (loss every
+            10 epochs, stop on the first increase). HALS minibatch/dataloader only.
+
         minibatch_spectra_tol: ``float``, optional, default: 1e-7
             The tolerance for updating spectra (W) in each mini-batch.
 
@@ -1375,7 +1398,9 @@ class cNMF():
                         minibatch_max_epoch = minibatch_max_epoch,
                         minibatch_size=minibatch_size,
                         minibatch_max_iter=minibatch_max_iter,
-                        minibatch_shuffle=minibatch_shuffle
+                        minibatch_shuffle=minibatch_shuffle,
+                        minibatch_rescale=minibatch_rescale,
+                        minibatch_patience=minibatch_patience
                         )
         
         ## Coordinate descent is faster than multiplicative update but only works for frobenius
@@ -1873,7 +1898,7 @@ class cNMF():
 
                 if cl_filter.sum() > 1:
                     cl_dist = squareform(topics_dist[cl_filter, :][:, cl_filter], checks=False)
-                    cl_dist[cl_dist < 0] = 0 #Rarely get floating point arithmetic issues
+                    cl_dist[cl_dist < 0] = 0  # Rarely get floating point arithmetic issues
                     cl_link = linkage(cl_dist, 'average')
                     cl_leaves_order = leaves_list(cl_link)
 
@@ -2223,6 +2248,8 @@ def main():
     parser.add_argument('--densify', dest='densify', help='[prepare] Treat the input data as non-sparse (default False)', action='store_true', default=False)
     parser.add_argument('--minibatch_size', '--batch_size', type=int, help='[prepare] Size of batch for online NMF learning. Counted in cells; refit_spectra sizes its own gene batches.', default=100000)
     parser.add_argument('--minibatch_shuffle', '--shuffle', action='store_true', help='[prepare] Enable shuffling of samples across mini-batches each epoch.', default=False)
+    parser.add_argument('--minibatch_patience', type=int, default=10, help='[prepare] Epochs without a new best loss before stopping (minibatch/dataloader HALS); loss is checked every epoch. Default 10; 0 = original rule (stop on first increase).')
+    parser.add_argument('--minibatch_rescale', action=argparse.BooleanOptionalAction, default=True, help='[prepare] Rescale spectra rows to unit norm after each epoch in minibatch/dataloader HALS (default on). Use --no-minibatch_rescale to turn off. Ignored when regularization is on.')
     parser.add_argument('--algo', type=str, choices=['mu', 'hals', 'halsvar', 'bpp'], help='[prepare] NMF algorithm (default halsvar)', default='halsvar')
     parser.add_argument('--mode', type=str, choices=['batch', 'minibatch', 'dataloader'], help='[prepare] Learning mode (default batch). minibatch and dataloader only work with frobenius loss.', default='batch')
     parser.add_argument('--tol', type=float, help='[prepare] Tolerance for convergence check (default 1e-7)', default=1e-7)
@@ -2262,7 +2289,8 @@ def main():
                          tpm_fn=args.tpm_fn, seed=args.seed, beta_loss=args.loss,
                          num_highvar_genes=args.numhvgenes, genes_file=args.genes_file, init=args.init,
                          use_gpu=args.use_gpu, minibatch_size=args.minibatch_size,
-                         minibatch_shuffle=args.minibatch_shuffle,
+                         minibatch_shuffle=args.minibatch_shuffle, minibatch_rescale=args.minibatch_rescale,
+                         minibatch_patience=args.minibatch_patience,
                          algo=args.algo, mode=args.mode, tol=args.tol, n_jobs=args.n_jobs,
                          alpha_usage=args.alpha_usage, alpha_spectra=args.alpha_spectra,
                          l1_ratio_usage=args.l1_ratio_usage, l1_ratio_spectra=args.l1_ratio_spectra,
